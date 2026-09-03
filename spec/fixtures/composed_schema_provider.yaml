@@ -1,0 +1,116 @@
+# Провайдер, описавший тело запроса композицией allOf, реквизиты — через oneOf
+# с дискриминатором, а одну из схем — рекурсивной ссылкой на саму себя.
+# Раньше такая спецификация давала ноль распознанных полей и падение разбора.
+openapi: 3.0.3
+info:
+  title: Composed Provider
+  version: "1.0"
+servers:
+  - url: https://api.composed.example/v1
+paths:
+  /payouts:
+    post:
+      summary: Создать выплату
+      operationId: createPayout
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/BasePayout'
+                - type: object
+                  properties:
+                    recipient:
+                      oneOf:
+                        - $ref: '#/components/schemas/SbpRecipient'
+                        - $ref: '#/components/schemas/CardRecipient'
+                      discriminator:
+                        propertyName: type
+      responses:
+        '201':
+          description: Создана
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayoutResponse'
+        '422':
+          description: Ошибка валидации
+  /payouts/{payout_id}:
+    get:
+      operationId: getPayout
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: payout_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Статус
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayoutResponse'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    BasePayout:
+      type: object
+      required: [amount, currency, external_id]
+      properties:
+        amount:
+          type: integer
+          description: Сумма в копейках
+          minimum: 10000
+        currency:
+          type: string
+          enum: [RUB]
+        external_id:
+          type: string
+
+    SbpRecipient:
+      type: object
+      required: [type, phone]
+      properties:
+        type:
+          type: string
+          enum: [sbp]
+        phone:
+          type: string
+          description: Телефон получателя для перевода по СБП
+        bank_code:
+          type: string
+          description: БИК банка получателя, СБП
+
+    CardRecipient:
+      type: object
+      required: [type, card_number]
+      properties:
+        type:
+          type: string
+          enum: [card]
+        card_number:
+          type: string
+          description: Номер карты получателя
+
+    PayoutResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [pending, completed, failed]
+        parent:
+          $ref: '#/components/schemas/PayoutResponse'

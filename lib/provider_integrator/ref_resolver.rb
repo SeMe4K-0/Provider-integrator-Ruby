@@ -7,8 +7,11 @@ module ProviderIntegrator
   # YAML-документа. Поддерживаются только внутренние ссылки на этот же файл — ссылка
   # на внешний файл считается неподдерживаемым элементом спецификации.
   class RefResolver
+    attr_reader :notes
+
     def initialize(root)
       @root = root
+      @notes = []
     end
 
     # Рекурсивно обходит узел и заменяет каждый { "$ref" => "#/..." } на данные,
@@ -35,9 +38,19 @@ module ProviderIntegrator
       unless ref.start_with?("#/")
         raise SpecLoadError, "Внешние ссылки $ref не поддерживаются: \"#{ref}\""
       end
-      raise SpecLoadError, "Циклическая ссылка $ref: \"#{ref}\"" if active.include?(ref)
+      return recursive_stub(ref) if active.include?(ref)
 
       resolve(pointer(ref), active + [ref])
+    end
+
+    # Схема, ссылающаяся на саму себя, — законная и нередкая конструкция OpenAPI.
+    # Отказываться из-за неё от всей спецификации нельзя: ветка обрывается пустой
+    # схемой, а факт обрыва попадает в замечания разбора. Глубже этого уровня
+    # генератору всё равно нечего извлечь.
+    def recursive_stub(ref)
+      @notes << "схема \"#{ref}\" ссылается на саму себя — рекурсивная ветка оборвана, " \
+                "вложенные уровни в модель не попали"
+      {}
     end
 
     # Находит узел документа по JSON-указателю вида "#/components/schemas/Recipient"

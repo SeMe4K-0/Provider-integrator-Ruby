@@ -74,7 +74,11 @@ if result.spec.security_schemes.empty?
   puts "Auth: не задана"
 else
   result.spec.security_schemes.each_value do |scheme|
-    detail = scheme.type == "apiKey" ? "(header: #{scheme.header_name})" : "(#{scheme.scheme})"
+    detail = case scheme.type
+             when "apiKey" then "(#{scheme.location == 'query' ? 'query' : 'header'}: #{scheme.header_name})"
+             when "http" then "(#{scheme.scheme})"
+             else "(#{scheme.type} — заголовки авторизации не генерируются)"
+             end
     puts "Auth: #{scheme.name} #{detail}"
   end
 end

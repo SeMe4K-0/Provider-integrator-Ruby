@@ -13,7 +13,9 @@ RSpec.describe "сгенерированные интеграции" do
     "bankex" => "specs_examples/bankex_api.yaml",
     "inline200" => "spec/fixtures/status_200_provider.yaml",
     "implicit" => "spec/fixtures/implicit_webhook_provider.yaml",
-    "nosecurity" => "spec/fixtures/no_security_provider.yaml"
+    "nosecurity" => "spec/fixtures/no_security_provider.yaml",
+    "queryauth" => "spec/fixtures/query_auth_provider.yaml",
+    "composed" => "spec/fixtures/composed_schema_provider.yaml"
   }.freeze
 
   ROOT = File.expand_path("..", __dir__)

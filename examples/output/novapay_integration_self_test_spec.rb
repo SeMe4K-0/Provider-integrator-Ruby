@@ -42,9 +42,9 @@ RSpec.describe Provider::NovapayService do
 
   def routes
     [
-      { method: "POST", path: %r{/payouts\z}, status: 201,
+      { method: "POST", path: %r{/payouts(?:\?|\z)}, status: 201,
         body: fixtures.dig("create_request", "response_201") },
-      { method: "GET", path: %r{/payouts/[^/]+\z}, status: 200,
+      { method: "GET", path: %r{/payouts/[^/]+(?:\?|\z)}, status: 200,
         body: fixtures.dig("fetch_status", "response_200") }
     ]
   end
@@ -72,7 +72,7 @@ RSpec.describe Provider::NovapayService do
       expect(body.dig("recipient", "phone")).to eq(operation.payout_requisite.dig("sbp", "phone"))
     end
 
-    it "передаёт заголовок авторизации" do
+    it "передаёт авторизацию провайдеру" do
       service.create_request(operation)
 
       expect(@server.requests.last.headers).to include("x-api-key" => "test_api_key")
@@ -104,7 +104,7 @@ RSpec.describe Provider::NovapayService do
     it "возвращает внутренний код ошибки на ответ 400" do
       @server.stop
       @server = MockProviderServer.new(
-        [{ method: "POST", path: %r{/payouts\z}, status: 400, body: { "error" => { "code" => "failed" } } }]
+        [{ method: "POST", path: %r{/payouts(?:\?|\z)}, status: 400, body: { "error" => { "code" => "failed" } } }]
       ).start
       ENV["NOVAPAY_BASE_URL"] = @server.base_url
 
@@ -121,6 +121,23 @@ RSpec.describe Provider::NovapayService do
         fixtures.dig("create_request", "response_201", "id")
 
       result = service.fetch_status(operation)
+
+      expect(result).to be_success
+      expect(result.payload[:status]).to eq("in_progress")
+    end
+  end
+
+  describe "отмена операции" do
+    it "приводит статус ответа на отмену к каноническому" do
+      @server.stop
+      @server = MockProviderServer.new(
+        [{ method: "POST", path: %r{/payouts/[^/]+/cancel(?:\?|\z)}, status: 200,
+           body: fixtures.dig("fetch_status", "response_200") }]
+      ).start
+      ENV["NOVAPAY_BASE_URL"] = @server.base_url
+      operation.provider_operation_id = "op_provider_1"
+
+      result = service.cancel_request(operation)
 
       expect(result).to be_success
       expect(result.payload[:status]).to eq("in_progress")

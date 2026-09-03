@@ -10,6 +10,9 @@ module ProviderIntegrator
   class GenerationContext
     DEFAULT_RULES_DIR = File.expand_path("../../config/rules", __dir__)
 
+    # Конец пути в маршруте мока: либо конец строки, либо начало query-строки
+    PATH_TAIL = '(?:\?|\z)'
+
     attr_reader :provider, :spec, :analysis, :mapping
 
     def initialize(provider:, spec:, analysis:, mapping:, rules_dir: DEFAULT_RULES_DIR)
@@ -333,24 +336,39 @@ module ProviderIntegrator
       end
     end
 
-    def auth_header_assertion
-      scheme = spec.security_schemes.values.first
+    # Проверка авторизации в самотесте зависит от того, куда уходит ключ:
+    # заголовком его ищут в headers, параметром запроса — в адресе
+    def auth_assertion
+      scheme = auth_scheme
+      return %(expect(@server.requests.last.path).to include("#{auth_query_parameter}=test_api_key")) if auth_query_parameter
+
       case scheme&.type
       when "apiKey"
-        %("#{scheme.header_name.downcase}" => "test_api_key")
+        %(expect(@server.requests.last.headers).to include("#{scheme.header_name.downcase}" => "test_api_key"))
       when "http"
-        scheme.scheme == "bearer" ? %("authorization" => "Bearer test_token") : %("authorization" => "Basic test_token")
+        value = scheme.scheme == "bearer" ? "Bearer test_token" : "Basic test_token"
+        %(expect(@server.requests.last.headers).to include("authorization" => "#{value}"))
       else
-        %("content-type" => "application/json")
+        %(expect(@server.requests.last.headers).to include("content-type" => "application/json"))
       end
     end
 
     # Регулярные выражения для мока: спецсимволы пути экранируются, чтобы точка
-    # или плюс в адресе не превратились в шаблон
+    # или плюс в адресе не превратились в шаблон. Хвост допускает query-строку —
+    # при авторизации ключом в параметре запроса она есть всегда.
     def create_path_pattern
       return nil if create_path.nil?
 
-      "#{Regexp.escape(create_path)}\\z"
+      "#{Regexp.escape(create_path)}#{PATH_TAIL}"
+    end
+
+    def cancel_path_pattern
+      return nil if cancel_endpoint.nil?
+
+      escaped = cancel_endpoint.path.split(/(\{[^}]+\})/).map do |part|
+        part.start_with?("{") ? "[^/]+" : Regexp.escape(part)
+      end.join
+      "#{escaped}#{PATH_TAIL}"
     end
 
     def status_path_pattern
@@ -359,7 +377,7 @@ module ProviderIntegrator
       escaped = status_endpoint.path.split(/(\{[^}]+\})/).map do |part|
         part.start_with?("{") ? "[^/]+" : Regexp.escape(part)
       end.join
-      "#{escaped}\\z"
+      "#{escaped}#{PATH_TAIL}"
     end
 
     # Код успешного ответа на создание берётся из спецификации, а не из литерала:

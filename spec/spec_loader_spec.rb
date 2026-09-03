@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "tmpdir"
+
 RSpec.describe ProviderIntegrator::SpecLoader do
   let(:fixtures) { File.expand_path("fixtures/broken", __dir__) }
   let(:novapay_spec) { File.expand_path("../specs_examples/provider_api.yaml", __dir__) }
@@ -83,6 +85,63 @@ RSpec.describe ProviderIntegrator::SpecLoader do
     it "сообщает об отсутствии раздела paths" do
       expect { described_class.load(File.join(fixtures, "missing_paths.yaml")) }
         .to raise_error(ProviderIntegrator::SpecLoadError, /paths/)
+    end
+
+    it "отличает каталог от файла спецификации" do
+      expect { described_class.load(File.expand_path("..", fixtures)) }
+        .to raise_error(ProviderIntegrator::SpecLoadError, /каталог/)
+    end
+  end
+
+  describe "конструкции, на которых разбор раньше прекращался" do
+    let(:composed) { File.expand_path("fixtures/composed_schema_provider.yaml", __dir__) }
+
+    it "разбирает дату без кавычек, а не падает на DisallowedClass" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "dated.yaml")
+        File.write(path, <<~YAML)
+          openapi: 3.0.3
+          info: { title: Dated, version: "1.0" }
+          x-released: 2024-01-01
+          paths:
+            /a:
+              get:
+                operationId: get
+                responses: { '200': { description: ok } }
+        YAML
+
+        expect(described_class.load(path).endpoints.size).to eq(1)
+      end
+    end
+
+    it "не отклоняет спецификацию из-за схемы, ссылающейся на саму себя" do
+      spec = described_class.load(composed)
+
+      expect(spec.endpoints.size).to eq(2)
+      expect(spec.notes.join).to include("ссылается на саму себя")
+    end
+
+    it "сливает allOf в одну схему с полями обеих подсхем" do
+      spec = described_class.load(composed)
+      create = spec.endpoints.find { |e| e.operation_id == "createPayout" }
+
+      expect(create.request_body_schema["properties"].keys).to include("amount", "currency", "external_id", "recipient")
+    end
+
+    it "принимает документ OpenAPI 3.1 без paths, но с webhooks" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "hooks_only.yaml")
+        File.write(path, <<~YAML)
+          openapi: 3.1.0
+          info: { title: Hooks, version: "1.0" }
+          webhooks:
+            statusChanged:
+              post:
+                responses: { '200': { description: ok } }
+        YAML
+
+        expect(described_class.load(path).raw_webhooks).to have_key("statusChanged")
+      end
     end
   end
 end

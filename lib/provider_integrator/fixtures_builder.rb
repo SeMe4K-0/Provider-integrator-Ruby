@@ -32,7 +32,21 @@ module ProviderIntegrator
       endpoint.response_examples.each do |code, examples|
         section["response_#{code}"] = first_example(examples)
       end
+      ensure_success_response(section, endpoint)
       section
+    end
+
+    # Ответ на создание нужен всегда: на нём держится и мок, и проверки создания
+    # в самотесте. Спецификация без example давала бы фикстуру без response_2xx,
+    # и блок проверок молча исчезал бы — падений нет, а покрытие просело.
+    def ensure_success_response(section, endpoint)
+      return if section.keys.any? { |key| key.match?(/\Aresponse_2\d\d\z/) }
+
+      code = endpoint.responses.keys.find { |status| status.to_s.start_with?("2") }
+      return if code.nil?
+
+      sample = SchemaSampler.sample(endpoint.responses[code])
+      section["response_#{code}"] = sample if sample.is_a?(Hash) && !sample.empty?
     end
 
     def fetch_section

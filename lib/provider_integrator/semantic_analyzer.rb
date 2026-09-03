@@ -38,7 +38,8 @@ module ProviderIntegrator
       AnalysisResult.new(
         endpoints: classified + webhook_from_section,
         webhook_found: !(webhook_from_paths + webhook_from_section).empty?,
-        webhook_source: webhook_source(webhook_from_paths, webhook_from_section)
+        webhook_source: webhook_source(webhook_from_paths, webhook_from_section),
+        heuristic_webhooks: @heuristic_webhooks
       )
     end
 

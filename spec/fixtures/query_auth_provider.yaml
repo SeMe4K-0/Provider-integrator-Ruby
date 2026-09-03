@@ -1,0 +1,84 @@
+# Провайдер, принимающий ключ параметром запроса, а не заголовком.
+# Проверяет, что ключ уходит в адрес, маршрут мока учитывает query-строку,
+# а самотест проверяет авторизацию там, где она на самом деле передаётся.
+openapi: 3.0.3
+info:
+  title: Query-auth Provider
+  version: "1.0"
+servers:
+  - url: https://api.queryauth.example/v1
+paths:
+  /payouts:
+    post:
+      summary: Создать выплату
+      operationId: createPayout
+      security:
+        - QueryKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, currency, external_id]
+              properties:
+                amount:
+                  type: integer
+                  description: Сумма в копейках
+                  minimum: 5000
+                currency:
+                  type: string
+                  enum: [RUB]
+                external_id:
+                  type: string
+                phone:
+                  type: string
+                  description: Телефон получателя для перевода по СБП
+      responses:
+        '201':
+          description: Создана
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayoutResponse'
+        '422':
+          description: Ошибка валидации
+  /payouts/{payout_id}:
+    get:
+      summary: Статус выплаты
+      operationId: getPayout
+      security:
+        - QueryKeyAuth: []
+      parameters:
+        - name: payout_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Статус
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayoutResponse'
+              example:
+                id: "qa_1"
+                status: completed
+
+components:
+  securitySchemes:
+    QueryKeyAuth:
+      type: apiKey
+      in: query
+      name: api_key
+
+  schemas:
+    PayoutResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [pending, completed, failed]

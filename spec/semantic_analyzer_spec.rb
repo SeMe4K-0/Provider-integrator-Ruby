@@ -89,6 +89,25 @@ RSpec.describe ProviderIntegrator::SemanticAnalyzer do
     end
   end
 
+  describe "смешанный случай: один webhook назван явно, другой угадан" do
+    subject(:analysis) do
+      spec = ProviderIntegrator::SpecLoader.load(File.join(fixtures, "mixed_webhook_provider.yaml"))
+      described_class.analyze(spec)
+    end
+
+    it "перечисляет угаданный вебхук отдельно, чтобы предупреждение не потерялось" do
+      expect(analysis.heuristic_webhooks.map(&:path)).to eq(["/events"])
+    end
+
+    it "не выдаёт догадку за явное объявление" do
+      report = ProviderIntegrator::DataMapper.map(
+        ProviderIntegrator::SpecLoader.load(File.join(fixtures, "mixed_webhook_provider.yaml")), analysis
+      ).report
+
+      expect(report.unresolved.map(&:detail).join).to include("только по косвенному признаку")
+    end
+  end
+
   describe "провайдер без webhook (ни path, ни webhooks:)" do
     subject(:analysis) do
       spec = ProviderIntegrator::SpecLoader.load(File.join(fixtures, "no_webhook_provider.yaml"))

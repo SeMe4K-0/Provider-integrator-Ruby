@@ -99,12 +99,12 @@ module ProviderIntegrator
     # Вебхук, опознанный только по косвенному признаку, — не факт, а догадка:
     # она выносится в отчёт, чтобы её проверил человек
     def report_webhook_confidence
-      return unless @analysis.webhook_source == :heuristic
+      guessed = Array(@analysis.heuristic_webhooks)
+      return if guessed.empty?
 
-      endpoints = @analysis.by_role(:webhook).map(&:to_s).join(", ")
       @report.add_unresolved(:webhook, "(определение роли)",
-                              "#{endpoints} опознан как входящее уведомление только по косвенному признаку " \
-                              "(публичный POST с телом) — убедитесь, что это не создание операции")
+                              "#{guessed.map(&:to_s).join(', ')} опознан как входящее уведомление только " \
+                              "по косвенному признаку (публичный POST с телом) — убедитесь, что это не создание операции")
     end
 
     def map_statuses

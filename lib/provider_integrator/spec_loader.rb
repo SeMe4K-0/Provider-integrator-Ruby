@@ -33,8 +33,10 @@ module ProviderIntegrator
       check_openapi_version!(raw)
       check_required_sections!(raw)
 
-      resolved = RefResolver.new(raw).resolve(raw)
-      normalized, @notes = SchemaNormalizer.normalize(resolved)
+      resolver = RefResolver.new(raw)
+      resolved = resolver.resolve(raw)
+      normalized, normalizer_notes = SchemaNormalizer.normalize(resolved)
+      @notes = resolver.notes.uniq + normalizer_notes
       build_spec_model(normalized)
     end
 

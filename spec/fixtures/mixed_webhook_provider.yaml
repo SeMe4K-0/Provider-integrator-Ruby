@@ -1,0 +1,82 @@
+# Провайдер с двумя приёмниками уведомлений: один назван явно (/webhooks/status),
+# второй распознаётся только по косвенному признаку (/events). Источник вебхука
+# остаётся :path, но предупреждение об угаданном гаснуть не должно.
+openapi: 3.0.3
+info:
+  title: Mixed-webhook Provider
+  version: "1.0"
+servers:
+  - url: https://api.mixed.example/v1
+paths:
+  /payouts:
+    post:
+      operationId: createPayout
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount:
+                  type: integer
+                  description: Сумма в копейках
+      responses:
+        '201':
+          description: Создана
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayoutResponse'
+  /webhooks/status:
+    post:
+      operationId: statusWebhook
+      security: []
+      parameters:
+        - name: X-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+          description: HMAC-SHA256 подпись тела запроса
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PayoutResponse'
+      responses:
+        '200':
+          description: Принято
+  /events:
+    post:
+      operationId: receiveEvent
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PayoutResponse'
+      responses:
+        '200':
+          description: Принято
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  schemas:
+    PayoutResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [pending, completed, failed]
