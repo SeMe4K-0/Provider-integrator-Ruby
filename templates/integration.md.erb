@@ -1,0 +1,89 @@
+# <%= spec_title %> — руководство по интеграции
+
+Документ сгенерирован из спецификации OpenAPI (версия <%= spec_version %>).
+
+## Авторизация
+
+- Схема: <%= auth_comment %>
+- Хранение секретов: `providers.credentials` (encrypted)
+- Базовый адрес: `<%= default_base_url %>`, переопределяется переменной окружения `<%= env_var_name %>`
+
+## Методы
+
+| Роль | Endpoint | Назначение | Идемпотентность |
+|------|----------|------------|-----------------|
+<% method_rows.each do |row| -%>
+| <%= row[:role] %> | `<%= row[:endpoint] %>` | <%= row[:summary] %> | <%= row[:idempotency] %> |
+<% end -%>
+
+## Маппинг статусов
+
+| Провайдер | Space Payments |
+|-----------|----------------|
+<% status_map.each do |provider_status, canonical| -%>
+| <%= provider_status %> | <%= canonical %> |
+<% end -%>
+
+## Обработка ошибок
+
+| HTTP | Внутренний код | Действие |
+|------|----------------|----------|
+<% error_map.each do |code, rule| -%>
+| <%= code %> | <%= rule[:code] %> | <%= rule[:action] %> |
+<% end -%>
+
+## Тело запроса на создание операции
+
+Сумма<% if mapping.amount_conversion? %> передаётся в минорных единицах, поэтому умножается на <%= mapping.amount_factor %><% else %> передаётся без конвертации единиц<% end %>.
+
+```ruby
+{
+<%= payload_source(payload_tree_for_docs, 2) %>
+}
+```
+
+## ProviderGateway config
+
+```json
+{ "external_method": "<%= gateway_external_method %>", "gateway": "<%= gateway_name %>" }
+```
+
+<% if signature -%>
+## Подпись webhook
+
+HMAC-<%= signature.algorithm %>(тело запроса, `credentials.callback_secret`) → <%= signature.encoding %> → заголовок `<%= signature.header_name %>`
+<% unless signature.confirmed -%>
+
+> Алгоритм не описан в спецификации явно. Принято значение по умолчанию из `config/rules/signature_schemes.yml` — подтвердите его у провайдера перед выходом в продакшн.
+<% end -%>
+<% else -%>
+## Подпись webhook
+
+В спецификации не найден заголовок с подписью входящих уведомлений — проверка подписи не сгенерирована. Уточните схему у провайдера.
+<% end -%>
+
+<% if unresolved_entries.any? -%>
+## Требует ручного решения
+
+Генератор не додумывает значения, которых нет в спецификации или в словарях правил. Ниже — всё, что осталось нераспознанным:
+
+| Категория | Элемент | Причина |
+|-----------|---------|---------|
+<% unresolved_entries.each do |entry| -%>
+| <%= entry.category %> | <%= entry.key %> | <%= entry.detail %> |
+<% end -%>
+<% else -%>
+## Требует ручного решения
+
+Нераспознанных элементов нет: все статусы, коды ошибок и поля запроса сопоставлены автоматически.
+<% end -%>
+
+## Тестирование
+
+Рядом лежат `fixtures.json` с примерами запросов, ответов и уведомлений и самотест
+`<%= self_test_file_name %>`, который поднимает локальный мок провайдера и прогоняет
+полный цикл: создание операции → запрос статуса → входящее уведомление с подписью.
+
+```bash
+rspec <%= self_test_file_name %>
+```

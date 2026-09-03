@@ -18,6 +18,11 @@ external_id:
   - reference
   - client_operation_id
 
+recipient_type:
+  - type
+  - recipient_type
+  - method
+
 recipient_phone:
   - phone
   - msisdn

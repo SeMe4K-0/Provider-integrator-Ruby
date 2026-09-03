@@ -1,0 +1,167 @@
+# frozen_string_literal: true
+
+require "json"
+require "openssl"
+
+# Сервис сгенерирован из спецификации "<%= spec_title %>" (версия <%= spec_version %>).
+# Правки вносите в спецификацию или в config/rules/*.yml и перегенерируйте файл.
+class Provider
+  class <%= class_name %> < BaseService
+    BASE_URL = ENV.fetch("<%= env_var_name %>", "<%= default_base_url %>")
+<% if signature -%>
+
+    # Заголовок с подписью входящего уведомления
+<% unless signature.confirmed -%>
+    # TODO: алгоритм подписи не указан в спецификации явно, принят HMAC-<%= signature.algorithm %>/<%= signature.encoding %> — подтвердите у провайдера
+<% end -%>
+    SIGNATURE_HEADER = "<%= signature.header_name %>"
+<% end -%>
+<% if min_amount -%>
+
+    # Минимальная сумма операции, из ограничения minimum в спецификации
+    MIN_AMOUNT = <%= min_amount %>
+<% end -%>
+
+    # Статусы провайдера → статусы Space Payments
+    STATUS_MAP = {
+<% status_map.each do |provider_status, canonical| -%>
+      "<%= provider_status %>" => "<%= canonical %>",
+<% end -%>
+<% unresolved_statuses.each do |status| -%>
+      # TODO: статус "<%= status %>" не сопоставлен, добавьте синоним в config/rules/statuses.yml
+<% end -%>
+<% if status_map.empty? -%>
+      # TODO: в спецификации не найден перечень статусов операции — заполните таблицу вручную
+<% end -%>
+    }.freeze
+
+    # HTTP-коды провайдера → внутренние коды ошибок и действия
+    ERROR_MAP = {
+<% error_map.each do |code, rule| -%>
+      <%= code %> => { code: "<%= rule[:code] %>", action: "<%= rule[:action] %>" },
+<% end -%>
+<% if error_map.empty? -%>
+      # TODO: в спецификации не описаны ответы с кодами 4xx/5xx — заполните таблицу вручную
+<% end -%>
+    }.freeze
+
+<% if min_amount -%>
+    def check_conditions(operation, request_method = "create")
+      base_result = super
+      return base_result if base_result.failed?
+      return failure(:unprocessable_entity, "amount_too_low") if operation.amount < MIN_AMOUNT
+
+      success
+    end
+
+<% end -%>
+<% if create_path -%>
+    def create_request(operation, request_method = "create")
+      response = client.post("#{base_url}<%= create_path %>", json: build_payload(operation), headers: auth_headers)
+      parse_create_response(operation, response)
+    rescue Provider::RateLimitError
+      failure(:too_many_requests, "provider.rate_limit")
+    rescue Provider::UnauthorizedError
+      failure(:unauthorized, "provider.invalid_credentials")
+    end
+
+<% end -%>
+<% if status_path -%>
+    def fetch_status(operation)
+      response = client.get("#{base_url}<%= status_path %>", headers: auth_headers)
+      return failure(*error_for(response.code)) unless response.success?
+
+      map_status(response.body["status"])
+    rescue Provider::RateLimitError
+      failure(:too_many_requests, "provider.rate_limit")
+    rescue Provider::UnauthorizedError
+      failure(:unauthorized, "provider.invalid_credentials")
+    end
+
+<% end -%>
+<% if cancel_path -%>
+    def cancel_request(operation)
+      response = client.post("#{base_url}<%= cancel_path %>", json: {}, headers: auth_headers)
+      return failure(*error_for(response.code)) unless response.success?
+
+      map_status(response.body["status"])
+    end
+
+<% end -%>
+<% if webhook_endpoint -%>
+    # Обработка входящего уведомления. Подпись обязательна: без неё уведомление
+    # отклоняется, даже если тело выглядит корректным.
+    def process_callback(payload, signature: nil, raw_body: nil)
+<% if signature -%>
+      return failure(:unauthorized, "provider.missing_signature") if signature.nil?
+      return failure(:unauthorized, "provider.invalid_signature") unless valid_signature?(raw_body || JSON.generate(payload), signature)
+
+<% end -%>
+      provider_operation_id = payload["<%= webhook_id_field %>"]
+      status = payload["status"] || payload["event"].to_s.split(".").last
+
+      case STATUS_MAP[status.to_s]
+      when "approved" then approve_operation(provider_operation_id)
+      when "rejected" then reject_operation(provider_operation_id, payload.dig("error", "code"))
+      when "in_progress" then progress_operation(provider_operation_id)
+      else failure(:unprocessable_entity, "provider.unknown_status")
+      end
+    end
+
+<% end -%>
+    private
+
+    # Базовый адрес API; переопределяется через переменную окружения для стендов и тестов
+    def base_url
+      ENV.fetch("<%= env_var_name %>", BASE_URL)
+    end
+
+    # Заголовки авторизации: <%= auth_comment %>
+    def auth_headers
+      <%= auth_headers_expression %>
+    end
+
+<% payload_todos.each do |todo| -%>
+    # TODO: <%= todo %>
+<% end -%>
+    # Незаполненные реквизиты отбрасываются: провайдеру не отправляются поля со значением nil
+    def build_payload(operation)
+      {
+<%= payload_source %>
+      }.compact
+    end
+
+    def parse_create_response(operation, response)
+      return failure(*error_for(response.code)) unless response.success?
+
+      operation.provider_operation_id = response.body["<%= provider_id_field %>"]
+      map_status(response.body["status"])
+    end
+
+    # Статус провайдера в статус Space Payments; неизвестное значение не угадывается
+    def map_status(provider_status)
+      canonical = STATUS_MAP[provider_status.to_s]
+      return failure(:unprocessable_entity, "provider.unknown_status") if canonical.nil?
+
+      success(status: canonical)
+    end
+
+    def error_for(http_code)
+      rule = ERROR_MAP[http_code] || { code: "internal_error", action: "alert_and_retry" }
+      [:unprocessable_entity, "provider.#{rule[:code]}"]
+    end
+<% if signature -%>
+
+    # Подпись тела запроса: HMAC-<%= signature.algorithm %>, кодировка <%= signature.encoding %>
+    def valid_signature?(raw_body, signature)
+<% if signature.encoding == "base64" -%>
+      digest = OpenSSL::HMAC.digest("<%= signature.algorithm %>", credentials.fetch(:callback_secret), raw_body)
+      expected = [digest].pack("m0")
+<% else -%>
+      expected = OpenSSL::HMAC.hexdigest("<%= signature.algorithm %>", credentials.fetch(:callback_secret), raw_body)
+<% end -%>
+      OpenSSL.secure_compare(expected, signature.to_s)
+    end
+<% end -%>
+  end
+end

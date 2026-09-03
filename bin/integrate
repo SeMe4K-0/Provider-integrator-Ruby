@@ -2,17 +2,21 @@
 # frozen_string_literal: true
 
 require "optparse"
-require_relative "../lib/provider_integrator/spec_loader"
-require_relative "../lib/provider_integrator/semantic_analyzer"
-require_relative "../lib/provider_integrator/data_mapper"
+require_relative "../lib/provider_integrator/pipeline"
 
-options = { spec: nil }
+ROLE_LABELS = {
+  create: "создание", status: "статус", cancel: "отмена", webhook: "webhook", other: "прочее"
+}.freeze
+
+options = { lang: "ruby", output: File.expand_path("../output", __dir__) }
 
 OptionParser.new do |parser|
-  parser.banner = "Использование: bin/integrate --spec PATH [--provider NAME] [--lang ruby]"
+  parser.banner = "Использование: bin/integrate --spec PATH [--provider NAME] [--lang ruby] [--output DIR]"
   parser.on("--spec PATH", "Путь к файлу спецификации OpenAPI") { |v| options[:spec] = v }
-  parser.on("--provider NAME", "Имя провайдера (для будущих частей генератора)") { |v| options[:provider] = v }
-  parser.on("--lang LANG", "Целевой язык генерации (сейчас поддерживается только ruby)") { |v| options[:lang] = v }
+  parser.on("--provider NAME", "Имя провайдера (используется в имени класса и файлов)") { |v| options[:provider] = v }
+  parser.on("--lang LANG", "Целевой язык генерации (поддерживается ruby)") { |v| options[:lang] = v }
+  parser.on("--output DIR", "Каталог для результата генерации") { |v| options[:output] = v }
+  parser.on("--dry-run", "Только разобрать спецификацию и показать отчёт, файлы не создавать") { options[:dry_run] = true }
 end.parse!(ARGV)
 
 unless options[:spec]
@@ -20,24 +24,40 @@ unless options[:spec]
   exit 1
 end
 
-puts "Parsing spec..."
-
-begin
-  spec = ProviderIntegrator::SpecLoader.load(options[:spec])
-rescue ProviderIntegrator::SpecLoadError => e
-  warn "Ошибка разбора спецификации: #{e.message}"
+unless options[:lang] == "ruby"
+  warn "Язык \"#{options[:lang]}\" не поддерживается, доступен только ruby"
   exit 1
 end
 
-analysis = ProviderIntegrator::SemanticAnalyzer.analyze(spec)
+# Имя провайдера по умолчанию берётся из первого слова заголовка спецификации
+provider = options[:provider] || File.basename(options[:spec], ".*").split(/[_\-\s]/).first
 
-endpoint_list = analysis.endpoints.map(&:to_s).join(", ")
-puts "Found #{analysis.endpoints.size} endpoints: #{endpoint_list}"
+puts "Parsing spec..."
 
-if spec.security_schemes.empty?
+begin
+  pipeline = ProviderIntegrator::Pipeline.new(
+    spec_path: options[:spec],
+    provider: provider,
+    output_dir: options[:output]
+  )
+  result = options[:dry_run] ? pipeline.analyze_only : pipeline.run
+rescue ProviderIntegrator::SpecLoadError => e
+  warn "Ошибка разбора спецификации: #{e.message}"
+  exit 1
+rescue ProviderIntegrator::GenerationError => e
+  warn "Ошибка генерации: #{e.message}"
+  exit 1
+end
+
+analysis = result.analysis
+report = result.mapping.report
+
+puts "Found #{analysis.endpoints.size} endpoints: #{analysis.endpoints.map(&:to_s).join(', ')}"
+
+if result.spec.security_schemes.empty?
   puts "Auth: не задана"
 else
-  spec.security_schemes.each_value do |scheme|
+  result.spec.security_schemes.each_value do |scheme|
     detail = scheme.type == "apiKey" ? "(header: #{scheme.header_name})" : "(#{scheme.scheme})"
     puts "Auth: #{scheme.name} #{detail}"
   end
@@ -45,22 +65,24 @@ end
 
 if analysis.webhook_found
   source = { path: "путь в paths", webhooks_section: "раздел webhooks:" }[analysis.webhook_source]
-  puts "Webhook: найден (#{source})"
+  signature = result.mapping.signature
+  suffix = signature ? ", подпись #{signature.header_name} (HMAC-#{signature.algorithm}/#{signature.encoding})" : ""
+  puts "Webhook: найден (#{source})#{suffix}"
 else
   puts "Webhook: не найден"
 end
 
-ROLE_LABELS = {
-  create: "создание", status: "статус", cancel: "отмена", webhook: "webhook", other: "прочее"
-}.freeze
-
 puts "\nРоли эндпоинтов:"
 analysis.endpoints.each { |e| puts "  #{e} → #{ROLE_LABELS[e.role]}" }
 
-report = ProviderIntegrator::DataMapper.map(spec, analysis)
 puts "\nСопоставление данных:"
 report.entries.each do |entry|
   icon = entry.status == :resolved ? "✅" : "⚠️"
   puts "  #{icon} [#{entry.category}] #{entry.key} #{entry.detail}"
 end
 puts "\nИтого: #{report.resolved.size} распознано, #{report.unresolved.size} требует правил"
+
+if result.written_files
+  puts "\nOutput:"
+  result.written_files.each { |path| puts "  #{path}" }
+end

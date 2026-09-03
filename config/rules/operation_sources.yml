@@ -1,0 +1,15 @@
+# Канонический признак поля → выражение на стороне Space Payments, из которого
+# берётся значение при сборке тела запроса к провайдеру.
+#
+# Если у поля в спецификации задан enum, генератор подставит литерал из enum
+# и это выражение не используется. Поле без выражения и без enum попадёт
+# в сгенерированный код как nil с пометкой TODO.
+
+amount: "operation.amount"
+currency: "operation.currency"
+external_id: "operation.id"
+recipient_type: "operation.payout_requisite[\"type\"]"
+recipient_phone: "operation.payout_requisite.dig(\"sbp\", \"phone\")"
+recipient_bank_code: "operation.payout_requisite.dig(\"sbp\", \"bank_code\")"
+recipient_bank_name: "operation.payout_requisite.dig(\"sbp\", \"bank_name\")"
+recipient_card_number: "operation.payout_requisite.dig(\"card\", \"number\")"

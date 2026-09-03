@@ -129,7 +129,9 @@ module ProviderIntegrator
         parameters: shared_params + build_parameters(operation["parameters"]),
         request_body_schema: request_body_schema(operation["requestBody"]),
         responses: build_responses(operation["responses"]),
-        security_names: security_names(security)
+        security_names: security_names(security),
+        request_examples: build_request_examples(operation["requestBody"]),
+        response_examples: build_response_examples(operation["responses"])
       )
     end
 
@@ -158,6 +160,36 @@ module ProviderIntegrator
       Hash(responses).each_with_object({}) do |(status, response), acc|
         acc[status] = response.is_a?(Hash) ? response.dig("content", "application/json", "schema") : nil
       end
+    end
+
+    # Примеры тела запроса: одиночный example сохраняется под ключом "default",
+    # именованные examples — под своими именами (нужны для генерации фикстур)
+    def build_request_examples(request_body)
+      return {} unless request_body.is_a?(Hash)
+
+      media = request_body.dig("content", "application/json")
+      named_examples(media)
+    end
+
+    # Примеры ответов по HTTP-кодам
+    def build_response_examples(responses)
+      Hash(responses).each_with_object({}) do |(status, response), acc|
+        next unless response.is_a?(Hash)
+
+        examples = named_examples(response.dig("content", "application/json"))
+        acc[status] = examples unless examples.empty?
+      end
+    end
+
+    def named_examples(media)
+      return {} unless media.is_a?(Hash)
+
+      result = {}
+      result["default"] = media["example"] if media.key?("example")
+      Hash(media["examples"]).each do |name, entry|
+        result[name] = entry["value"] if entry.is_a?(Hash) && entry.key?("value")
+      end
+      result
     end
 
     # Массив SecurityRequirement (например [{"ApiKeyAuth" => []}]) превращается
