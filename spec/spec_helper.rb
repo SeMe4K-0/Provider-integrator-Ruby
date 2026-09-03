@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "../lib/provider_integrator/spec_loader"
+require_relative "../lib/provider_integrator/semantic_analyzer"
 
 RSpec.configure do |config|
   config.disable_monkey_patching!

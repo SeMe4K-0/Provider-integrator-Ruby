@@ -1,0 +1,60 @@
+openapi: 3.1.0
+info:
+  title: Webhooks-section Provider
+  version: "1.0"
+servers:
+  - url: https://api.example.com/v1
+paths:
+  /transfers:
+    post:
+      operationId: createTransfer
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount:
+                  type: integer
+      responses:
+        '201':
+          description: created
+  /transfers/{id}:
+    get:
+      operationId: getTransfer
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+webhooks:
+  transferUpdated:
+    post:
+      operationId: transferUpdatedWebhook
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+      responses:
+        '200':
+          description: received
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
