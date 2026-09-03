@@ -1,0 +1,52 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "optparse"
+require_relative "../lib/provider_integrator/spec_loader"
+
+options = { spec: nil }
+
+OptionParser.new do |parser|
+  parser.banner = "Использование: bin/integrate --spec PATH [--provider NAME] [--lang ruby]"
+  parser.on("--spec PATH", "Путь к файлу спецификации OpenAPI") { |v| options[:spec] = v }
+  parser.on("--provider NAME", "Имя провайдера (для будущих частей генератора)") { |v| options[:provider] = v }
+  parser.on("--lang LANG", "Целевой язык генерации (сейчас поддерживается только ruby)") { |v| options[:lang] = v }
+end.parse!(ARGV)
+
+unless options[:spec]
+  warn "Не указан обязательный параметр --spec"
+  exit 1
+end
+
+puts "Parsing spec..."
+
+begin
+  spec = ProviderIntegrator::SpecLoader.load(options[:spec])
+rescue ProviderIntegrator::SpecLoadError => e
+  warn "Ошибка разбора спецификации: #{e.message}"
+  exit 1
+end
+
+endpoint_list = spec.endpoints.map(&:to_s).join(", ")
+puts "Found #{spec.endpoints.size} endpoints: #{endpoint_list}"
+
+if spec.security_schemes.empty?
+  puts "Auth: не задана"
+else
+  spec.security_schemes.each_value do |scheme|
+    detail = scheme.type == "apiKey" ? "(header: #{scheme.header_name})" : "(#{scheme.scheme})"
+    puts "Auth: #{scheme.name} #{detail}"
+  end
+end
+
+# Черновая оценка наличия webhook-эндпоинта по пути и отсутствию авторизации.
+# Полноценная классификация ролей эндпоинтов появится во второй части (SemanticAnalyzer).
+webhook_candidate = spec.endpoints.find do |e|
+  e.public? && (e.path.downcase.include?("webhook") || e.path.downcase.include?("callback"))
+end
+
+if webhook_candidate
+  puts "Webhook: найден (#{webhook_candidate})"
+else
+  puts "Webhook: не найден (уточнится во второй части анализа)"
+end
