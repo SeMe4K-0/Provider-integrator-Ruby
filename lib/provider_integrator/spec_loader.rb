@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "date"
 require "yaml"
 
 require_relative "errors"
@@ -35,12 +36,20 @@ module ProviderIntegrator
 
     private
 
+    # Даты в спецификациях встречаются постоянно (version: 2024-01-01, примеры
+    # с датами), поэтому Date и Time разрешены явно: иначе Psych поднимает
+    # DisallowedClass на совершенно нормальном документе.
     def read_yaml
       raise SpecLoadError, "Файл не найден: #{@path}" unless File.exist?(@path)
+      raise SpecLoadError, "Ожидается файл спецификации, а указан каталог: #{@path}" unless File.file?(@path)
 
-      YAML.safe_load_file(@path, aliases: true)
+      YAML.safe_load_file(@path, permitted_classes: [Date, Time], aliases: true)
     rescue Psych::SyntaxError => e
       raise SpecLoadError, "Некорректный YAML в файле #{@path}: #{e.message}"
+    rescue Psych::Exception => e
+      raise SpecLoadError, "Не удалось разобрать YAML в файле #{@path}: #{e.message}"
+    rescue SystemCallError => e
+      raise SpecLoadError, "Не удалось прочитать файл #{@path}: #{e.message}"
     end
 
     def check_openapi_version!(raw)
@@ -105,7 +114,7 @@ module ProviderIntegrator
       Hash(paths).each_with_object([]) do |(path, path_item), acc|
         next unless path_item.is_a?(Hash)
 
-        shared_params = build_parameters(path_item["parameters"])
+        shared_params = self.class.build_parameters(path_item["parameters"])
 
         HTTP_METHODS.each do |method|
           operation = path_item[method]
@@ -126,7 +135,7 @@ module ProviderIntegrator
         http_method: method,
         operation_id: operation["operationId"],
         summary: operation["summary"],
-        parameters: shared_params + build_parameters(operation["parameters"]),
+        parameters: merge_parameters(shared_params, self.class.build_parameters(operation["parameters"])),
         request_body_schema: request_body_schema(operation["requestBody"]),
         responses: build_responses(operation["responses"]),
         security_names: security_names(security),
@@ -135,7 +144,9 @@ module ProviderIntegrator
       )
     end
 
-    def build_parameters(params)
+    # Вызывается и снаружи: SemanticAnalyzer разбирает этим же кодом параметры
+    # операций из раздела webhooks: (OpenAPI 3.1)
+    def self.build_parameters(params)
       Array(params).map do |p|
         schema = p.fetch("schema", {})
         IR::Parameter.new(
@@ -160,6 +171,13 @@ module ProviderIntegrator
       Hash(responses).each_with_object({}) do |(status, response), acc|
         acc[status] = response.is_a?(Hash) ? response.dig("content", "application/json", "schema") : nil
       end
+    end
+
+    # По спецификации параметр операции перекрывает объявленный на уровне пути,
+    # если совпадают имя и расположение
+    def merge_parameters(path_level, operation_level)
+      overridden = operation_level.map { |p| [p.name, p.location] }
+      path_level.reject { |p| overridden.include?([p.name, p.location]) } + operation_level
     end
 
     # Примеры тела запроса: одиночный example сохраняется под ключом "default",

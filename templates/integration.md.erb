@@ -8,6 +8,14 @@
 - Хранение секретов: `providers.credentials` (encrypted)
 - Базовый адрес: `<%= default_base_url %>`, переопределяется переменной окружения `<%= env_var_name %>`
 
+Ключи, которые сервис читает из `credentials` (отсутствие любого приведёт к `KeyError`):
+
+| Ключ | Назначение |
+|------|------------|
+<% credential_keys.each do |key, purpose| -%>
+| `<%= key %>` | <%= purpose %> |
+<% end -%>
+
 ## Методы
 
 | Роль | Endpoint | Назначение | Идемпотентность |
@@ -48,10 +56,29 @@
 { "external_method": "<%= gateway_external_method %>", "gateway": "<%= gateway_name %>" }
 ```
 
+<% if webhook_endpoint -%>
+## Формат уведомления
+
+`process_callback(payload)` принимает один аргумент — так требует контракт `Provider::BaseService`.
+Платформа передаёт в нём конверт:
+
+```ruby
+{
+  "body" => { … разобранное тело уведомления … },
+<% if signature -%>
+  "raw_body" => '{"…"}',                       # сырое тело запроса, байт в байт
+  "headers" => { "<%= signature.header_name %>" => "…" }
+<% end -%>
+}
+```
+
+Тело можно передать и напрямую, без ключа `body`<% if signature %>, но `raw_body` обязателен: подпись считается от исходных байтов, а пересобранный JSON не совпадёт с ними по порядку ключей и экранированию. Уведомление без сырого тела отклоняется с `provider.raw_body_required`, без подписи — с `provider.missing_signature`<% end %>.
+
+<% end -%>
 <% if signature -%>
 ## Подпись webhook
 
-HMAC-<%= signature.algorithm %>(тело запроса, `credentials.callback_secret`) → <%= signature.encoding %> → заголовок `<%= signature.header_name %>`
+HMAC-<%= signature.algorithm %>(сырое тело запроса, `credentials.callback_secret`) → <%= signature.encoding %> → заголовок `<%= signature.header_name %>`
 <% unless signature.confirmed -%>
 
 > Алгоритм не описан в спецификации явно. Принято значение по умолчанию из `config/rules/signature_schemes.yml` — подтвердите его у провайдера перед выходом в продакшн.

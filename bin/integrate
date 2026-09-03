@@ -10,14 +10,22 @@ ROLE_LABELS = {
 
 options = { lang: "ruby", output: File.expand_path("../output", __dir__) }
 
-OptionParser.new do |parser|
-  parser.banner = "Использование: bin/integrate --spec PATH [--provider NAME] [--lang ruby] [--output DIR]"
-  parser.on("--spec PATH", "Путь к файлу спецификации OpenAPI") { |v| options[:spec] = v }
-  parser.on("--provider NAME", "Имя провайдера (используется в имени класса и файлов)") { |v| options[:provider] = v }
-  parser.on("--lang LANG", "Целевой язык генерации (поддерживается ruby)") { |v| options[:lang] = v }
-  parser.on("--output DIR", "Каталог для результата генерации") { |v| options[:output] = v }
-  parser.on("--dry-run", "Только разобрать спецификацию и показать отчёт, файлы не создавать") { options[:dry_run] = true }
-end.parse!(ARGV)
+PROVIDER_NAME_FORMAT = /\A[a-z][a-z0-9_]*\z/
+
+begin
+  OptionParser.new do |parser|
+    parser.banner = "Использование: bin/integrate --spec PATH [--provider NAME] [--lang ruby] [--output DIR]"
+    parser.on("--spec PATH", "Путь к файлу спецификации OpenAPI") { |v| options[:spec] = v }
+    parser.on("--provider NAME", "Имя провайдера (используется в имени класса и файлов)") { |v| options[:provider] = v }
+    parser.on("--lang LANG", "Целевой язык генерации (поддерживается ruby)") { |v| options[:lang] = v }
+    parser.on("--output DIR", "Каталог для результата генерации") { |v| options[:output] = v }
+    parser.on("--dry-run", "Только разобрать спецификацию и показать отчёт, файлы не создавать") { options[:dry_run] = true }
+  end.parse!(ARGV)
+rescue OptionParser::ParseError => e
+  warn "Ошибка в аргументах: #{e.message}"
+  warn "Запустите bin/integrate --help, чтобы увидеть список параметров"
+  exit 1
+end
 
 unless options[:spec]
   warn "Не указан обязательный параметр --spec"
@@ -29,8 +37,16 @@ unless options[:lang] == "ruby"
   exit 1
 end
 
-# Имя провайдера по умолчанию берётся из первого слова заголовка спецификации
-provider = options[:provider] || File.basename(options[:spec], ".*").split(/[_\-\s]/).first
+# Имя провайдера по умолчанию берётся из имени файла спецификации. Оно попадает
+# в имя класса и в путь файла, поэтому проверяется до начала работы: иначе
+# генератор отрапортует успех, создав файл с невалидным Ruby внутри.
+provider = (options[:provider] || File.basename(options[:spec].to_s, ".*").split(/[_\-\s]/).first).to_s.downcase
+
+unless provider.match?(PROVIDER_NAME_FORMAT)
+  warn "Недопустимое имя провайдера: #{provider.inspect}"
+  warn "Ожидается имя из латинских букв, цифр и подчёркиваний, начинающееся с буквы, например: novapay"
+  exit 1
+end
 
 puts "Parsing spec..."
 

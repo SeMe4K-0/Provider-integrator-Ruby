@@ -18,9 +18,13 @@ module ProviderIntegrator
 
     Result = Struct.new(:spec, :analysis, :mapping, :context, :written_files, keyword_init: true)
 
+    # Имя провайдера попадает и в имя класса, и в путь файла, поэтому проверяется
+    # на входе: иначе генератор молча создаст файл с невалидным Ruby внутри
+    PROVIDER_NAME_FORMAT = /\A[a-z][a-z0-9_]*\z/
+
     def initialize(spec_path:, provider:, output_dir:, rules_dir: DataMapper::DEFAULT_RULES_DIR)
       @spec_path = spec_path
-      @provider = provider
+      @provider = validate_provider(provider)
       @output_dir = output_dir
       @rules_dir = rules_dir
     end
@@ -43,6 +47,15 @@ module ProviderIntegrator
     end
 
     private
+
+    def validate_provider(provider)
+      name = provider.to_s.downcase
+      return name if name.match?(PROVIDER_NAME_FORMAT)
+
+      raise GenerationError,
+            "Недопустимое имя провайдера: #{provider.inspect}. Ожидается имя из латинских букв, " \
+            "цифр и подчёркиваний, начинающееся с буквы, например: novapay"
+    end
 
     def write_files(context)
       prepare_output_dir

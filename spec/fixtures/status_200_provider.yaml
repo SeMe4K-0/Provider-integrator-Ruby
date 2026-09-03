@@ -1,0 +1,81 @@
+# Провайдер, отвечающий на создание кодом 200, а не 201, и без раздела components:
+# все схемы объявлены прямо в ответах. Проверяет, что самотест не зашит на 201
+# и что генерация не зависит от выноса схем в components.
+openapi: 3.0.3
+info:
+  title: Inline-200 Provider
+  version: "1.0"
+servers:
+  - url: https://api.inline.example
+paths:
+  /payments:
+    post:
+      summary: Создать выплату
+      operationId: createPayment
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, currency, external_id]
+              properties:
+                amount:
+                  type: integer
+                  description: Сумма в копейках
+                  minimum: 10000
+                currency:
+                  type: string
+                  enum: [RUB]
+                external_id:
+                  type: string
+                phone:
+                  type: string
+      responses:
+        '200':
+          description: Создана
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  status: { type: string, enum: [pending, completed, failed] }
+              example:
+                id: "in_1"
+                status: pending
+        '400':
+          description: Ошибка валидации
+  /payments/{id}:
+    get:
+      operationId: getPayment
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Статус
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  status: { type: string, enum: [pending, completed, failed] }
+              example:
+                id: "in_1"
+                status: completed
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key

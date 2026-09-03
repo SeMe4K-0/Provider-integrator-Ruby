@@ -103,7 +103,7 @@ class Provider
       not_implemented
     end
 
-    def process_callback(_payload, signature: nil, raw_body: nil)
+    def process_callback(_payload)
       not_implemented
     end
 

@@ -54,7 +54,8 @@ RSpec.describe Provider::NovapayService do
       result = service.create_request(operation)
 
       expect(result).to be_success
-      expect(operation.provider_operation_id).to eq(fixtures.dig("create_request", "response_201", "id"))
+      expect(operation.provider_operation_id)
+        .to eq(fixtures.dig("create_request", "response_201", "id"))
     end
 
     it "конвертирует сумму в минорные единицы" do
@@ -64,12 +65,11 @@ RSpec.describe Provider::NovapayService do
       expect(body["amount"]).to eq(operation.amount * 100)
     end
 
-    it "собирает вложенные реквизиты получателя" do
+    it "собирает реквизиты получателя" do
       service.create_request(operation)
 
       body = JSON.parse(@server.requests.last.body)
-      expect(body.dig("recipient", "phone"))
-        .to eq(operation.payout_requisite.dig("sbp", "phone"))
+      expect(body.dig("recipient", "phone")).to eq(operation.payout_requisite.dig("sbp", "phone"))
     end
 
     it "передаёт заголовок авторизации" do
@@ -81,7 +81,8 @@ RSpec.describe Provider::NovapayService do
 
   describe "запрос статуса" do
     it "приводит статус провайдера к каноническому" do
-      operation.provider_operation_id = fixtures.dig("create_request", "response_201", "id")
+      operation.provider_operation_id =
+        fixtures.dig("create_request", "response_201", "id")
 
       result = service.fetch_status(operation)
 
@@ -95,40 +96,47 @@ RSpec.describe Provider::NovapayService do
       OpenSSL::HMAC.hexdigest("SHA256", callback_secret, raw_body)
     end
 
-    it "подтверждает операцию по уведомлению с корректной подписью" do
-      payload = fixtures.dig("callback", "payload")
-      raw_body = JSON.generate(payload)
+    # Конверт уведомления в том виде, в каком его передаёт платформа
+    def envelope(body, signature: nil)
+      raw_body = JSON.generate(body)
+      {
+        "body" => body,
+        "raw_body" => raw_body,
+        "headers" => { "X-NovaPay-Signature" => signature || sign(raw_body) }
+      }
+    end
 
-      result = service.process_callback(payload, signature: sign(raw_body), raw_body: raw_body)
+    it "подтверждает операцию по уведомлению с корректной подписью" do
+      result = service.process_callback(envelope(fixtures.dig("callback", "payload")))
 
       expect(result).to be_success
       expect(result.payload[:status]).to eq(fixtures.dig("callback", "expected_operation_status"))
     end
 
-    it "отклоняет уведомление с неверной подписью" do
-      payload = fixtures.dig("callback", "payload")
-      raw_body = JSON.generate(payload)
+    it "принимает тело уведомления и без конверта, если платформа передала его напрямую" do
+      body = fixtures.dig("callback", "payload")
+      payload = body.merge("raw_body" => JSON.generate(body),
+                            "headers" => { "X-NovaPay-Signature" => sign(JSON.generate(body)) })
 
-      result = service.process_callback(payload, signature: "0" * 64, raw_body: raw_body)
+      expect(service.process_callback(payload)).to be_success
+    end
+
+    it "отклоняет уведомление с неверной подписью" do
+      result = service.process_callback(envelope(fixtures.dig("callback", "payload"), signature: "0" * 64))
 
       expect(result).to be_failed
       expect(result.message).to eq("provider.invalid_signature")
     end
 
     it "отклоняет уведомление без подписи" do
-      payload = fixtures.dig("callback", "payload")
-
-      result = service.process_callback(payload)
+      result = service.process_callback(fixtures.dig("callback", "payload"))
 
       expect(result).to be_failed
       expect(result.message).to eq("provider.missing_signature")
     end
 
     it "отклоняет операцию по уведомлению об ошибке" do
-      payload = fixtures.dig("callback_failed", "payload")
-      raw_body = JSON.generate(payload)
-
-      result = service.process_callback(payload, signature: sign(raw_body), raw_body: raw_body)
+      result = service.process_callback(envelope(fixtures.dig("callback_failed", "payload")))
 
       expect(result).to be_success
       expect(result.payload[:status]).to eq(fixtures.dig("callback_failed", "expected_operation_status"))

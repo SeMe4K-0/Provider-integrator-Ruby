@@ -153,6 +153,21 @@ module ProviderIntegrator
       end
     end
 
+    # Ключи credentials, которые действительно читает сгенерированный сервис
+    def credential_keys
+      scheme = spec.security_schemes.values.first
+      keys = case scheme&.type
+             when "http"
+               scheme.scheme == "bearer" ? { "token" => "Bearer-токен" } : { "basic_token" => "Basic-токен" }
+             when "apiKey"
+               { "api_key" => "ключ API, заголовок #{scheme.header_name}" }
+             else
+               {}
+             end
+      keys["callback_secret"] = "секрет для проверки подписи уведомлений" if signature
+      keys
+    end
+
     def auth_comment
       scheme = spec.security_schemes.values.first
       return "авторизация в спецификации не описана" if scheme.nil?
@@ -278,11 +293,46 @@ module ProviderIntegrator
       end
     end
 
-    # Регулярное выражение для мока: путь статуса с любым идентификатором
+    # Регулярные выражения для мока: спецсимволы пути экранируются, чтобы точка
+    # или плюс в адресе не превратились в шаблон
+    def create_path_pattern
+      return nil if create_path.nil?
+
+      "#{Regexp.escape(create_path)}\\z"
+    end
+
     def status_path_pattern
       return nil if status_endpoint.nil?
 
-      status_endpoint.path.gsub(/\{[^}]+\}/, "[^/]+") + '\z'
+      escaped = status_endpoint.path.split(/(\{[^}]+\})/).map do |part|
+        part.start_with?("{") ? "[^/]+" : Regexp.escape(part)
+      end.join
+      "#{escaped}\\z"
+    end
+
+    # Код успешного ответа на создание берётся из спецификации, а не из литерала:
+    # провайдер может отвечать и 200, и 202
+    def create_success_code
+      key = fixtures.dig("create_request")&.keys&.find { |k| k.match?(/\Aresponse_2\d\d\z/) }
+      key ? key.sub("response_", "") : nil
+    end
+
+    def create_success_fixture
+      code = create_success_code
+      code ? "response_#{code}" : nil
+    end
+
+    def status_success_fixture
+      fixtures["fetch_status"]&.keys&.first
+    end
+
+    # Обращение к телефону получателя в теле запроса: у одного провайдера он
+    # лежит во вложенном объекте реквизитов, у другого — прямо в корне
+    def recipient_phone_access
+      entry = mapping.fields["recipient_phone"]
+      return nil if entry.nil?
+
+      entry[:path].size > 1 ? %(body.dig("#{entry[:path].first}", "#{entry[:name]}")) : %(body["#{entry[:name]}"])
     end
 
     # Ожидаемый статус для самотеста берётся из той же фикстуры, что отдаёт мок.
@@ -320,10 +370,24 @@ module ProviderIntegrator
       end
     end
 
+    # Путь поля может конфликтовать с уже занятым: например, amount записан
+    # скаляром, а следом приходит amount.currency из вложенного объекта суммы.
+    # В таком случае поле пропускается с пометкой, а не роняет генерацию.
     def insert_by_path(tree, path, value)
       *parents, leaf = path
-      node = parents.reduce(tree) { |acc, key| acc[key] ||= {} }
-      node[leaf] = value
+      node = tree
+
+      parents.each do |key|
+        unless node[key].nil? || node[key].is_a?(Hash)
+          @payload_todos << "поле #{path.join('.')} пропущено: \"#{key}\" уже занято значением — проверьте вложенность вручную"
+          return nil
+        end
+
+        node[key] ||= {}
+        node = node[key]
+      end
+
+      node[leaf] = value unless node[leaf].is_a?(Hash)
     end
 
     # Значение поля выбирается по трём правилам:

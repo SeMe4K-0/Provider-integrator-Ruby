@@ -114,7 +114,9 @@ module ProviderIntegrator
         http_method: method,
         operation_id: operation["operationId"] || name,
         summary: operation["summary"],
-        parameters: [],
+        # Параметры переносятся как есть: среди них объявлен заголовок подписи,
+        # без которого проверка подписи не сгенерируется
+        parameters: SpecLoader.build_parameters(operation["parameters"]),
         request_body_schema: operation.dig("requestBody", "content", "application/json", "schema"),
         responses: {},
         security_names: []

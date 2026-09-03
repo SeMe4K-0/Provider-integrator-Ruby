@@ -8,6 +8,13 @@
 - Хранение секретов: `providers.credentials` (encrypted)
 - Базовый адрес: `https://api.sandbox.novapay.example/v1`, переопределяется переменной окружения `NOVAPAY_BASE_URL`
 
+Ключи, которые сервис читает из `credentials` (отсутствие любого приведёт к `KeyError`):
+
+| Ключ | Назначение |
+|------|------------|
+| `api_key` | ключ API, заголовок X-API-Key |
+| `callback_secret` | секрет для проверки подписи уведомлений |
+
 ## Методы
 
 | Роль | Endpoint | Назначение | Идемпотентность |
@@ -66,9 +73,24 @@
 { "external_method": "sbp_payout", "gateway": "RUB_SBP_WITHDRAW" }
 ```
 
+## Формат уведомления
+
+`process_callback(payload)` принимает один аргумент — так требует контракт `Provider::BaseService`.
+Платформа передаёт в нём конверт:
+
+```ruby
+{
+  "body" => { … разобранное тело уведомления … },
+  "raw_body" => '{"…"}',                       # сырое тело запроса, байт в байт
+  "headers" => { "X-NovaPay-Signature" => "…" }
+}
+```
+
+Тело можно передать и напрямую, без ключа `body`, но `raw_body` обязателен: подпись считается от исходных байтов, а пересобранный JSON не совпадёт с ними по порядку ключей и экранированию. Уведомление без сырого тела отклоняется с `provider.raw_body_required`, без подписи — с `provider.missing_signature`.
+
 ## Подпись webhook
 
-HMAC-SHA256(тело запроса, `credentials.callback_secret`) → hex → заголовок `X-NovaPay-Signature`
+HMAC-SHA256(сырое тело запроса, `credentials.callback_secret`) → hex → заголовок `X-NovaPay-Signature`
 
 ## Требует ручного решения
 

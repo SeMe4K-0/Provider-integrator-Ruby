@@ -36,6 +36,22 @@ class Provider
       500 => { code: "internal_error", action: "alert_and_retry" },
     }.freeze
 
+    # HTTP-код провайдера в статус результата Space Payments
+    HTTP_STATUS_MAP = {
+      400 => :bad_request,
+      401 => :unauthorized,
+      402 => :payment_required,
+      403 => :forbidden,
+      404 => :not_found,
+      409 => :conflict,
+      422 => :unprocessable_entity,
+      429 => :too_many_requests,
+      500 => :internal_server_error,
+      502 => :bad_gateway,
+      503 => :service_unavailable,
+      504 => :gateway_timeout
+    }.freeze
+
     def check_conditions(operation, request_method = "create")
       base_result = super
       return base_result if base_result.failed?
@@ -56,6 +72,7 @@ class Provider
     def fetch_status(operation)
       response = client.get("#{base_url}/payouts/#{operation.provider_operation_id}", headers: auth_headers)
       return failure(*error_for(response.code)) unless response.success?
+      return failure(:unprocessable_entity, "provider.malformed_response") unless response.body.is_a?(Hash)
 
       map_status(response.body["status"])
     rescue Provider::RateLimitError
@@ -67,22 +84,28 @@ class Provider
     def cancel_request(operation)
       response = client.post("#{base_url}/payouts/#{operation.provider_operation_id}/cancel", json: {}, headers: auth_headers)
       return failure(*error_for(response.code)) unless response.success?
+      return failure(:unprocessable_entity, "provider.malformed_response") unless response.body.is_a?(Hash)
 
       map_status(response.body["status"])
     end
 
-    # Обработка входящего уведомления. Подпись обязательна: без неё уведомление
-    # отклоняется, даже если тело выглядит корректным.
-    def process_callback(payload, signature: nil, raw_body: nil)
-      return failure(:unauthorized, "provider.missing_signature") if signature.nil?
-      return failure(:unauthorized, "provider.invalid_signature") unless valid_signature?(raw_body || JSON.generate(payload), signature)
+    # Обработка входящего уведомления по контракту платформы: один аргумент.
+    # Тело уведомления, сырое тело и заголовки платформа передаёт в одном
+    # объекте payload (см. раздел "Формат уведомления" в INTEGRATION.md).
+    # Подпись обязательна: неподписанное уведомление отклоняется, даже если
+    # тело выглядит корректным.
+    def process_callback(payload)
+      body = callback_body(payload)
+      return failure(:unauthorized, "provider.missing_signature") if callback_signature(payload).nil?
+      return failure(:unprocessable_entity, "provider.raw_body_required") if callback_raw_body(payload).nil?
+      return failure(:unauthorized, "provider.invalid_signature") unless valid_signature?(payload)
 
-      provider_operation_id = payload["payout_id"]
-      status = payload["status"] || payload["event"].to_s.split(".").last
+      provider_operation_id = body["payout_id"]
+      status = body["status"] || body["event"].to_s.split(".").last
 
       case STATUS_MAP[status.to_s]
       when "approved" then approve_operation(provider_operation_id)
-      when "rejected" then reject_operation(provider_operation_id, payload.dig("error", "code"))
+      when "rejected" then reject_operation(provider_operation_id, body.dig("error", "code"))
       when "in_progress" then progress_operation(provider_operation_id)
       else failure(:unprocessable_entity, "provider.unknown_status")
       end
@@ -119,9 +142,30 @@ class Provider
 
     def parse_create_response(operation, response)
       return failure(*error_for(response.code)) unless response.success?
+      return failure(:unprocessable_entity, "provider.malformed_response") unless response.body.is_a?(Hash)
 
       operation.provider_operation_id = response.body["id"]
       map_status(response.body["status"])
+    end
+
+    # Платформа может передать тело уведомления как есть или в конверте
+    # с ключами "body", "raw_body" и "headers"
+    def callback_body(payload)
+      payload["body"].is_a?(Hash) ? payload["body"] : payload
+    end
+
+    def callback_signature(payload)
+      headers = payload["headers"]
+      return payload["signature"] unless headers.is_a?(Hash)
+
+      headers[SIGNATURE_HEADER] || headers[SIGNATURE_HEADER.downcase]
+    end
+
+    # Подпись считается от сырого тела запроса байт в байт: пересобранный JSON
+    # не совпадёт с исходным по порядку ключей и экранированию, поэтому
+    # уведомление без сырого тела не принимается
+    def callback_raw_body(payload)
+      payload["raw_body"]
     end
 
     # Статус провайдера в статус Space Payments; неизвестное значение не угадывается
@@ -132,15 +176,23 @@ class Provider
       success(status: canonical)
     end
 
+    # HTTP-код провайдера в статус Space Payments и внутренний код ошибки.
+    # Действие (retry / retry_backoff / alert_*) берётся из ERROR_MAP вызывающей
+    # стороной — оно определяет, повторять ли операцию.
     def error_for(http_code)
       rule = ERROR_MAP[http_code] || { code: "internal_error", action: "alert_and_retry" }
-      [:unprocessable_entity, "provider.#{rule[:code]}"]
+      [HTTP_STATUS_MAP.fetch(http_code, :unprocessable_entity), "provider.#{rule[:code]}"]
+    end
+
+    def error_action(http_code)
+      ERROR_MAP.dig(http_code, :action) || "alert_and_retry"
     end
 
     # Подпись тела запроса: HMAC-SHA256, кодировка hex
-    def valid_signature?(raw_body, signature)
+    def valid_signature?(payload)
+      raw_body = callback_raw_body(payload)
       expected = OpenSSL::HMAC.hexdigest("SHA256", credentials.fetch(:callback_secret), raw_body)
-      OpenSSL.secure_compare(expected, signature.to_s)
+      OpenSSL.secure_compare(expected, callback_signature(payload).to_s)
     end
   end
 end

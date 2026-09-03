@@ -37,19 +37,25 @@ RSpec.describe Provider::<%= class_name %> do
 
   def routes
     [
-      { method: "POST", path: %r{<%= create_path %>\z}, status: 201,
-        body: fixtures.dig("create_request", "response_201") },
-      { method: "GET", path: %r{<%= status_path_pattern %>}, status: 200,
-        body: fixtures.dig("fetch_status", "response_200") }
+<% if create_success_fixture -%>
+      { method: "POST", path: %r{<%= create_path_pattern %>}, status: <%= create_success_code %>,
+        body: fixtures.dig("create_request", "<%= create_success_fixture %>") },
+<% end -%>
+<% if status_path_pattern && status_success_fixture -%>
+      { method: "GET", path: %r{<%= status_path_pattern %>}, status: <%= status_success_fixture.sub('response_', '') %>,
+        body: fixtures.dig("fetch_status", "<%= status_success_fixture %>") }
+<% end -%>
     ]
   end
 
+<% if create_success_fixture -%>
   describe "создание операции" do
     it "отправляет запрос и сохраняет идентификатор операции провайдера" do
       result = service.create_request(operation)
 
       expect(result).to be_success
-      expect(operation.provider_operation_id).to eq(fixtures.dig("create_request", "response_201", "<%= provider_id_field %>"))
+      expect(operation.provider_operation_id)
+        .to eq(fixtures.dig("create_request", "<%= create_success_fixture %>", "<%= provider_id_field %>"))
     end
 
 <% if mapping.amount_conversion? -%>
@@ -62,12 +68,11 @@ RSpec.describe Provider::<%= class_name %> do
 
 <% end -%>
 <% if mapping.fields.key?("recipient_phone") -%>
-    it "собирает вложенные реквизиты получателя" do
+    it "собирает реквизиты получателя" do
       service.create_request(operation)
 
       body = JSON.parse(@server.requests.last.body)
-      expect(body.dig("<%= mapping.fields.dig('recipient_phone', :path).first %>", "<%= mapping.fields.dig('recipient_phone', :name) %>"))
-        .to eq(operation.payout_requisite.dig("sbp", "phone"))
+      expect(<%= recipient_phone_access %>).to eq(operation.payout_requisite.dig("sbp", "phone"))
     end
 
 <% end -%>
@@ -78,10 +83,12 @@ RSpec.describe Provider::<%= class_name %> do
     end
   end
 
-<% if status_path && expected_fetch_status -%>
+<% end -%>
+<% if status_path && expected_fetch_status && create_success_fixture -%>
   describe "запрос статуса" do
     it "приводит статус провайдера к каноническому" do
-      operation.provider_operation_id = fixtures.dig("create_request", "response_201", "<%= provider_id_field %>")
+      operation.provider_operation_id =
+        fixtures.dig("create_request", "<%= create_success_fixture %>", "<%= provider_id_field %>")
 
       result = service.fetch_status(operation)
 
@@ -101,30 +108,40 @@ RSpec.describe Provider::<%= class_name %> do
 <% end -%>
     end
 
-    it "подтверждает операцию по уведомлению с корректной подписью" do
-      payload = fixtures.dig("callback", "payload")
-      raw_body = JSON.generate(payload)
+    # Конверт уведомления в том виде, в каком его передаёт платформа
+    def envelope(body, signature: nil)
+      raw_body = JSON.generate(body)
+      {
+        "body" => body,
+        "raw_body" => raw_body,
+        "headers" => { "<%= signature.header_name %>" => signature || sign(raw_body) }
+      }
+    end
 
-      result = service.process_callback(payload, signature: sign(raw_body), raw_body: raw_body)
+    it "подтверждает операцию по уведомлению с корректной подписью" do
+      result = service.process_callback(envelope(fixtures.dig("callback", "payload")))
 
       expect(result).to be_success
       expect(result.payload[:status]).to eq(fixtures.dig("callback", "expected_operation_status"))
     end
 
-    it "отклоняет уведомление с неверной подписью" do
-      payload = fixtures.dig("callback", "payload")
-      raw_body = JSON.generate(payload)
+    it "принимает тело уведомления и без конверта, если платформа передала его напрямую" do
+      body = fixtures.dig("callback", "payload")
+      payload = body.merge("raw_body" => JSON.generate(body),
+                            "headers" => { "<%= signature.header_name %>" => sign(JSON.generate(body)) })
 
-      result = service.process_callback(payload, signature: "0" * 64, raw_body: raw_body)
+      expect(service.process_callback(payload)).to be_success
+    end
+
+    it "отклоняет уведомление с неверной подписью" do
+      result = service.process_callback(envelope(fixtures.dig("callback", "payload"), signature: "0" * 64))
 
       expect(result).to be_failed
       expect(result.message).to eq("provider.invalid_signature")
     end
 
     it "отклоняет уведомление без подписи" do
-      payload = fixtures.dig("callback", "payload")
-
-      result = service.process_callback(payload)
+      result = service.process_callback(fixtures.dig("callback", "payload"))
 
       expect(result).to be_failed
       expect(result.message).to eq("provider.missing_signature")
@@ -132,10 +149,7 @@ RSpec.describe Provider::<%= class_name %> do
 
 <% if has_failed_callback_fixture -%>
     it "отклоняет операцию по уведомлению об ошибке" do
-      payload = fixtures.dig("callback_failed", "payload")
-      raw_body = JSON.generate(payload)
-
-      result = service.process_callback(payload, signature: sign(raw_body), raw_body: raw_body)
+      result = service.process_callback(envelope(fixtures.dig("callback_failed", "payload")))
 
       expect(result).to be_success
       expect(result.payload[:status]).to eq(fixtures.dig("callback_failed", "expected_operation_status"))

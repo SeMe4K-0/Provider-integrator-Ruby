@@ -104,22 +104,40 @@ module ProviderIntegrator
 
     # Имя поля статуса у разных провайдеров отличается (status, state и т.д.),
     # поэтому оно ищется по списку из statuses.yml, а не берётся жёстко.
-    # Подходит первое поле с известным именем и перечислением значений.
     def detect_status_field
       candidates = Array(@statuses_rules["field_names"]).map(&:downcase)
 
-      Hash(@spec_model.schemas).each_value do |schema|
-        next unless schema.is_a?(Hash)
+      status_schemas.each do |schema|
+        found = status_field_in(schema, candidates)
+        return found if found
+      end
+      nil
+    end
 
-        props = schema["properties"]
-        next unless props.is_a?(Hash)
+    # Схемы просматриваются в осмысленном порядке, а не в порядке объявления:
+    # сначала ответ на запрос статуса и на создание, затем тело уведомления,
+    # и только потом общие схемы. Иначе победит первый попавшийся enum —
+    # например, статус баланса вместо статуса операции. Схемы, объявленные
+    # прямо в ответах, учитываются наравне с вынесенными в components.
+    def status_schemas
+      from_endpoints = %i[status create webhook].flat_map do |role|
+        endpoint = @analysis.by_role(role).first
+        next [] if endpoint.nil?
 
-        props.each do |name, prop_schema|
-          next unless candidates.include?(name.downcase) && prop_schema.is_a?(Hash)
-          next unless prop_schema["enum"].is_a?(Array)
+        [success_response_schema(endpoint), endpoint.request_body_schema]
+      end
 
-          return { name: name, enum: prop_schema["enum"] }
-        end
+      (from_endpoints + Hash(@spec_model.schemas).values).compact
+    end
+
+    def status_field_in(schema, candidates)
+      return nil unless schema.is_a?(Hash)
+
+      Hash(schema["properties"]).each do |name, prop_schema|
+        next unless candidates.include?(name.downcase) && prop_schema.is_a?(Hash)
+        next unless prop_schema["enum"].is_a?(Array)
+
+        return { name: name, enum: prop_schema["enum"] }
       end
       nil
     end

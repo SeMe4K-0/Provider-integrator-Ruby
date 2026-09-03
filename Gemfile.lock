@@ -1,10 +1,7 @@
 GEM
   remote: https://rubygems.org/
   specs:
-    commonmarker (2.10.0-x64-mingw-ucrt)
     diff-lcs (1.6.2)
-    openapi3_parser (0.10.1)
-      commonmarker (>= 1.0)
     rspec (3.13.2)
       rspec-core (~> 3.13.0)
       rspec-expectations (~> 3.13.0)
@@ -20,16 +17,17 @@ GEM
     rspec-support (3.13.7)
 
 PLATFORMS
+  arm64-darwin
+  ruby
   x64-mingw-ucrt
+  x86_64-darwin
+  x86_64-linux
 
 DEPENDENCIES
-  openapi3_parser (~> 0.10)
   rspec (~> 3.13)
 
 CHECKSUMS
-  commonmarker (2.10.0-x64-mingw-ucrt) sha256=eccc49602f2073ec903d2f461639b9ef83f093a0a2404a3aa97deed4084636ae
   diff-lcs (1.6.2) sha256=9ae0d2cba7d4df3075fe8cd8602a8604993efc0dfa934cff568969efb1909962
-  openapi3_parser (0.10.1) sha256=e373bfcec1f183252a51fbe28787b52c4052e045697bae1778258bb9b3296a19
   rspec (3.13.2) sha256=206284a08ad798e61f86d7ca3e376718d52c0bc944626b2349266f239f820587
   rspec-core (3.13.6) sha256=a8823c6411667b60a8bca135364351dda34cd55e44ff94c4be4633b37d828b2d
   rspec-expectations (3.13.5) sha256=33a4d3a1d95060aea4c94e9f237030a8f9eae5615e9bd85718fe3a09e4b58836
