@@ -2,6 +2,7 @@
 
 require_relative "../lib/provider_integrator/spec_loader"
 require_relative "../lib/provider_integrator/semantic_analyzer"
+require_relative "../lib/provider_integrator/data_mapper"
 
 RSpec.configure do |config|
   config.disable_monkey_patching!

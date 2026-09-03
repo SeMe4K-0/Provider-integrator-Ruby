@@ -3,6 +3,8 @@
 
 require "optparse"
 require_relative "../lib/provider_integrator/spec_loader"
+require_relative "../lib/provider_integrator/semantic_analyzer"
+require_relative "../lib/provider_integrator/data_mapper"
 
 options = { spec: nil }
 
@@ -27,8 +29,10 @@ rescue ProviderIntegrator::SpecLoadError => e
   exit 1
 end
 
-endpoint_list = spec.endpoints.map(&:to_s).join(", ")
-puts "Found #{spec.endpoints.size} endpoints: #{endpoint_list}"
+analysis = ProviderIntegrator::SemanticAnalyzer.analyze(spec)
+
+endpoint_list = analysis.endpoints.map(&:to_s).join(", ")
+puts "Found #{analysis.endpoints.size} endpoints: #{endpoint_list}"
 
 if spec.security_schemes.empty?
   puts "Auth: не задана"
@@ -39,14 +43,24 @@ else
   end
 end
 
-# Черновая оценка наличия webhook-эндпоинта по пути и отсутствию авторизации.
-# Полноценная классификация ролей эндпоинтов появится во второй части (SemanticAnalyzer).
-webhook_candidate = spec.endpoints.find do |e|
-  e.public? && (e.path.downcase.include?("webhook") || e.path.downcase.include?("callback"))
+if analysis.webhook_found
+  source = { path: "путь в paths", webhooks_section: "раздел webhooks:" }[analysis.webhook_source]
+  puts "Webhook: найден (#{source})"
+else
+  puts "Webhook: не найден"
 end
 
-if webhook_candidate
-  puts "Webhook: найден (#{webhook_candidate})"
-else
-  puts "Webhook: не найден (уточнится во второй части анализа)"
+ROLE_LABELS = {
+  create: "создание", status: "статус", cancel: "отмена", webhook: "webhook", other: "прочее"
+}.freeze
+
+puts "\nРоли эндпоинтов:"
+analysis.endpoints.each { |e| puts "  #{e} → #{ROLE_LABELS[e.role]}" }
+
+report = ProviderIntegrator::DataMapper.map(spec, analysis)
+puts "\nСопоставление данных:"
+report.entries.each do |entry|
+  icon = entry.status == :resolved ? "✅" : "⚠️"
+  puts "  #{icon} [#{entry.category}] #{entry.key} #{entry.detail}"
 end
+puts "\nИтого: #{report.resolved.size} распознано, #{report.unresolved.size} требует правил"

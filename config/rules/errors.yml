@@ -1,0 +1,16 @@
+# HTTP-код ответа провайдера → внутренний код ошибки Space Payments + действие.
+# action: reject | retry | retry_backoff | alert_and_block | alert_and_retry
+# Код, которого нет в этом списке, DataMapper не додумывает — попадает в unresolved.
+
+400: { code: validation_error,     action: reject }
+401: { code: invalid_credentials,  action: alert_and_block }
+402: { code: insufficient_balance, action: retry }
+403: { code: forbidden,            action: alert_and_block }
+404: { code: not_found,            action: reject }
+409: { code: conflict,             action: reject }
+422: { code: validation_error,     action: reject }
+429: { code: rate_limit,           action: retry_backoff }
+500: { code: internal_error,       action: alert_and_retry }
+502: { code: internal_error,       action: alert_and_retry }
+503: { code: internal_error,       action: alert_and_retry }
+504: { code: internal_error,       action: alert_and_retry }
