@@ -239,3 +239,5 @@ bundle exec rspec output/novapay_integration_self_test_spec.rb
 - `specs_examples/provider_api.yaml` — спецификация из условия кейса Space Payments; `cardpay_api.yaml` и `bankex_api.yaml` написаны для демонстрации универсальности
 
 Нейросети в решении не используются: разбор спецификации и все сопоставления выполняются детерминированным кодом и редактируемыми словарями правил.
+
+Проект распространяется по лицензии MIT — см. [LICENSE](LICENSE).
