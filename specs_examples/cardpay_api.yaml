@@ -1,0 +1,234 @@
+openapi: 3.0.3
+info:
+  title: CardPay Payments API
+  description: |
+    Демонстрационная спецификация второго провайдера: выплаты на карту,
+    авторизация по Bearer-токену, суммы в центах, подпись webhook —
+    HMAC-SHA512 в base64. Нужна, чтобы показать работу генератора на
+    спецификации, отличающейся от NovaPay набором методов, полей и статусов.
+  version: 2.4.0
+
+servers:
+  - url: https://api.cardpay.example/v2
+    description: Production
+
+paths:
+  /payments:
+    post:
+      summary: Создать выплату на карту
+      operationId: createPayment
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: X-Request-Id
+          in: header
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: Ключ идемпотентности запроса
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePaymentRequest'
+            examples:
+              card_payout:
+                summary: Выплата на карту
+                value:
+                  amount: 250000
+                  currency: USD
+                  merchant_id: "op_991"
+                  destination:
+                    type: card
+                    pan: "4111111111111111"
+                    holder: "IVAN IVANOV"
+      responses:
+        '201':
+          description: Выплата принята
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+              example:
+                payment_id: "cp_5521aa"
+                merchant_id: "op_991"
+                state: created
+                amount: 250000
+        '401':
+          description: Невалидный токен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Ошибка валидации
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Превышен лимит запросов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Провайдер временно недоступен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /payments/{payment_id}:
+    get:
+      summary: Получить состояние выплаты
+      operationId: getPayment
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: payment_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Состояние выплаты
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+              example:
+                payment_id: "cp_5521aa"
+                merchant_id: "op_991"
+                state: success
+                amount: 250000
+        '404':
+          description: Выплата не найдена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /callbacks/status:
+    post:
+      summary: Уведомление о смене состояния выплаты
+      operationId: statusCallback
+      security: []
+      parameters:
+        - name: X-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+          description: HMAC-SHA512 signature of the raw request body, base64 encoded
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CallbackPayload'
+            examples:
+              success:
+                summary: Выплата исполнена
+                value:
+                  payment_id: "cp_5521aa"
+                  merchant_id: "op_991"
+                  state: success
+              declined:
+                summary: Выплата отклонена
+                value:
+                  payment_id: "cp_5521aa"
+                  merchant_id: "op_991"
+                  state: declined
+                  error:
+                    code: card_blocked
+                    message: "Card is blocked by issuer"
+      responses:
+        '200':
+          description: Уведомление принято
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Токен выдаётся в личном кабинете провайдера
+
+  schemas:
+    CreatePaymentRequest:
+      type: object
+      required: [amount, currency, merchant_id, destination]
+      properties:
+        amount:
+          type: integer
+          description: Amount in cents
+          minimum: 50000
+          example: 250000
+        currency:
+          type: string
+          enum: [USD, EUR]
+          example: USD
+        merchant_id:
+          type: string
+          description: Идентификатор операции на стороне мерчанта
+          maxLength: 64
+        destination:
+          $ref: '#/components/schemas/Destination'
+
+    Destination:
+      type: object
+      required: [type, pan]
+      properties:
+        type:
+          type: string
+          enum: [card]
+        pan:
+          type: string
+          description: Номер карты получателя
+        holder:
+          type: string
+          description: Имя держателя карты
+
+    PaymentResponse:
+      type: object
+      properties:
+        payment_id:
+          type: string
+        merchant_id:
+          type: string
+        state:
+          type: string
+          enum: [created, sent, success, declined, manual_review]
+        amount:
+          type: integer
+
+    CallbackPayload:
+      type: object
+      required: [payment_id, status]
+      properties:
+        payment_id:
+          type: string
+        merchant_id:
+          type: string
+        state:
+          type: string
+          enum: [created, sent, success, declined, manual_review]
+        error:
+          $ref: '#/components/schemas/ProviderError'
+
+    ProviderError:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          $ref: '#/components/schemas/ProviderError'

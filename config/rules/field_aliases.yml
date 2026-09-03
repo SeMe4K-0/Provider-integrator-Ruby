@@ -1,42 +1,50 @@
 # Канонический признак поля Space Payments → возможные имена этого поля
 # в теле запроса провайдера (верхний уровень и один уровень вложенности,
 # например recipient.phone). Регистр не важен — сравнение приводится к нижнему.
+#
+# required — поля, без которых интеграция невозможна: их отсутствие помечается
+#   как требующее ручного решения.
+# optional — поля конкретного способа выплаты: у карточного провайдера не будет
+#   телефона, у СБП-провайдера не будет номера карты. Их отсутствие ожидаемо
+#   и в отчёте показывается нейтрально, а не как проблема.
 
-amount:
-  - amount
-  - sum
-  - value
-  - total
+required:
+  amount:
+    - amount
+    - sum
+    - value
+    - total
 
-currency:
-  - currency
-  - curr
+  currency:
+    - currency
+    - curr
 
-external_id:
-  - external_id
-  - merchant_id
-  - reference
-  - client_operation_id
+  external_id:
+    - external_id
+    - merchant_id
+    - reference
+    - client_operation_id
 
-recipient_type:
-  - type
-  - recipient_type
-  - method
+optional:
+  recipient_type:
+    - type
+    - recipient_type
+    - method
 
-recipient_phone:
-  - phone
-  - msisdn
-  - recipient_phone
+  recipient_phone:
+    - phone
+    - msisdn
+    - recipient_phone
 
-recipient_bank_code:
-  - bank_code
-  - bic
-  - routing_number
+  recipient_bank_code:
+    - bank_code
+    - bic
+    - routing_number
 
-recipient_bank_name:
-  - bank_name
+  recipient_bank_name:
+    - bank_name
 
-recipient_card_number:
-  - card_number
-  - pan
-  - card
+  recipient_card_number:
+    - card_number
+    - pan
+    - card

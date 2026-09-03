@@ -75,12 +75,14 @@ end
 puts "\nРоли эндпоинтов:"
 analysis.endpoints.each { |e| puts "  #{e} → #{ROLE_LABELS[e.role]}" }
 
+ICONS = { resolved: "✅", unresolved: "⚠️", skipped: "·" }.freeze
+
 puts "\nСопоставление данных:"
 report.entries.each do |entry|
-  icon = entry.status == :resolved ? "✅" : "⚠️"
-  puts "  #{icon} [#{entry.category}] #{entry.key} #{entry.detail}"
+  puts "  #{ICONS.fetch(entry.status)} [#{entry.category}] #{entry.key} #{entry.detail}"
 end
-puts "\nИтого: #{report.resolved.size} распознано, #{report.unresolved.size} требует правил"
+puts "\nИтого: #{report.resolved.size} распознано, #{report.unresolved.size} требует решения, " \
+     "#{report.skipped.size} неприменимо к этому провайдеру"
 
 if result.written_files
   puts "\nOutput:"

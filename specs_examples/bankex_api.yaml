@@ -1,0 +1,153 @@
+openapi: 3.0.3
+info:
+  title: Bankex Transfer API
+  description: |
+    Демонстрационная спецификация третьего провайдера: переводы по номеру телефона,
+    авторизация по API-ключу в нестандартном заголовке, другие имена полей
+    (sum, msisdn, bic) и полное отсутствие вебхуков — статус узнаётся только
+    опросом. Нужна, чтобы показать поведение генератора там, где часть
+    механизмов у провайдера просто отсутствует.
+  version: 1.2.0
+
+servers:
+  - url: https://gate.bankex.example/api
+
+paths:
+  /transfers:
+    post:
+      summary: Создать перевод
+      operationId: createTransfer
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferRequest'
+            examples:
+              default:
+                value:
+                  sum: 5000
+                  currency: RUB
+                  reference: "op_77"
+                  target:
+                    msisdn: "79001234567"
+                    bic: "044525974"
+      responses:
+        '201':
+          description: Перевод создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResponse'
+              example:
+                transfer_id: "bx-100500"
+                reference: "op_77"
+                state: accepted
+        '400':
+          description: Некорректный запрос
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Доступ запрещён
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Внутренняя ошибка
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /transfers/{transfer_id}:
+    get:
+      summary: Состояние перевода
+      operationId: getTransfer
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: transfer_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Состояние перевода
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResponse'
+              example:
+                transfer_id: "bx-100500"
+                reference: "op_77"
+                state: done
+        '404':
+          description: Перевод не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: Authorization-Token
+
+  schemas:
+    TransferRequest:
+      type: object
+      required: [sum, currency, reference, target]
+      properties:
+        sum:
+          type: integer
+          description: Сумма перевода в рублях
+          minimum: 100
+        currency:
+          type: string
+          enum: [RUB]
+        reference:
+          type: string
+          description: Идентификатор операции на стороне отправителя
+        target:
+          $ref: '#/components/schemas/Target'
+
+    Target:
+      type: object
+      required: [msisdn]
+      properties:
+        msisdn:
+          type: string
+          description: Номер телефона получателя
+        bic:
+          type: string
+          description: БИК банка получателя
+
+    TransferResponse:
+      type: object
+      properties:
+        transfer_id:
+          type: string
+        reference:
+          type: string
+        state:
+          type: string
+          enum: [accepted, in_progress, done, error]
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string

@@ -8,7 +8,6 @@
 amount: "operation.amount"
 currency: "operation.currency"
 external_id: "operation.id"
-recipient_type: "operation.payout_requisite[\"type\"]"
 recipient_phone: "operation.payout_requisite.dig(\"sbp\", \"phone\")"
 recipient_bank_code: "operation.payout_requisite.dig(\"sbp\", \"bank_code\")"
 recipient_bank_name: "operation.payout_requisite.dig(\"sbp\", \"bank_name\")"

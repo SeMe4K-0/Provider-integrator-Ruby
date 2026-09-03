@@ -49,6 +49,45 @@ module ProviderIntegrator
       mapping.status_map
     end
 
+    # Имя поля, из которого читается статус операции у этого провайдера
+    def status_field
+      mapping.status_field || "status"
+    end
+
+    # Поля структуры операции для самотеста: собираются из выражений вида
+    # operation.<поле>, которые реально попали в сгенерированный код
+    def operation_attributes
+      expressions = mapping.fields.keys.filter_map { |canonical| @sources[canonical] }
+      expressions.join(" ").scan(/operation\.([a-z_]+)/).flatten.uniq
+    end
+
+    def operation_struct_members
+      (operation_attributes + ["provider_operation_id"]).map { |name| ":#{name}" }.join(", ")
+    end
+
+    # Значения этих полей в самотесте
+    def operation_sample_values
+      operation_attributes.map do |name|
+        case name
+        when "id" then %(id: "op_test_1")
+        when "amount" then "amount: #{sample_amount}"
+        when "currency" then %(currency: "#{mapping.currency || 'RUB'}")
+        when "payout_requisite" then "payout_requisite: #{sample_requisite_literal}"
+        else %(#{name}: "test_value")
+        end
+      end
+    end
+
+    def sample_requisite_literal
+      <<~REQUISITE.strip
+        {
+          "type" => "#{sample_requisite_type}",
+          "sbp" => { "phone" => "79001234567", "bank_code" => "044525225", "bank_name" => "Тестбанк" },
+          "card" => { "number" => "4111111111111111" }
+        }
+      REQUISITE
+    end
+
     def error_map
       mapping.error_map
     end
@@ -246,9 +285,12 @@ module ProviderIntegrator
       status_endpoint.path.gsub(/\{[^}]+\}/, "[^/]+") + '\z'
     end
 
+    # Ожидаемый статус для самотеста берётся из той же фикстуры, что отдаёт мок.
+    # Если из примера ответа статус не выводится, проверка не генерируется —
+    # заведомо падающий тест хуже отсутствующего.
     def expected_fetch_status
       body = fixtures.dig("fetch_status")&.values&.first
-      status = body.is_a?(Hash) ? body["status"] : nil
+      status = body.is_a?(Hash) ? body[status_field] : nil
       mapping.status_map[status.to_s]
     end
 
@@ -284,16 +326,19 @@ module ProviderIntegrator
       node[leaf] = value
     end
 
-    # Значение поля: литерал из enum, конвертированная сумма или выражение
-    # из operation_sources.yml. Если источник неизвестен — nil и пометка TODO.
+    # Значение поля выбирается по трём правилам:
+    #   enum из одного значения — подставляется литерал, вариантов нет;
+    #   enum из нескольких значений — берётся выражение Space Payments, если оно
+    #     задано, иначе первый вариант с пометкой TODO;
+    #   без enum — выражение из operation_sources.yml, при его отсутствии nil и TODO.
     def value_expression(canonical, entry)
       enum = entry[:schema].is_a?(Hash) ? entry[:schema]["enum"] : nil
-      if enum.is_a?(Array) && !enum.empty?
-        note_enum_choice(entry, enum)
-        return %("#{enum.first}")
-      end
-
+      enum = nil unless enum.is_a?(Array) && !enum.empty?
       source = @sources[canonical]
+
+      return %("#{enum.first}") if enum && enum.size == 1
+      return literal_from_enum(entry, enum) if enum && source.nil?
+
       if source.nil?
         @payload_todos << "поле #{entry[:path].join('.')}: источник значения не задан в config/rules/operation_sources.yml"
         return "nil"
@@ -302,10 +347,9 @@ module ProviderIntegrator
       canonical == "amount" && mapping.amount_conversion? ? "(#{source} * #{mapping.amount_factor}).to_i" : source
     end
 
-    def note_enum_choice(entry, enum)
-      return if enum.size == 1
-
-      @payload_todos << "поле #{entry[:path].join('.')}: выбрано \"#{enum.first}\" из вариантов #{enum.join(', ')}"
+    def literal_from_enum(entry, enum)
+      @payload_todos << "поле #{entry[:path].join('.')}: выбрано \"#{enum.first}\" из вариантов #{enum.join(', ')} — проверьте, что это соответствует шлюзу"
+      %("#{enum.first}")
     end
 
     def substitute_path(endpoint)

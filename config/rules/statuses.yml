@@ -1,32 +1,46 @@
-# Синонимы статусов провайдера → канонические статусы Space Payments.
-# Канонические значения: in_progress, approved, rejected.
-# Если статус провайдера не найден ни в одном списке — DataMapper не угадывает,
-# а помечает его как unresolved (см. MappingReport).
+# Правила разбора статусов операции.
+#
+# field_names — имена, под которыми провайдер может передавать статус операции.
+#   Первое поле с таким именем и перечислением значений считается статусным.
+# canonical — синонимы статусов провайдера → канонические статусы Space Payments
+#   (in_progress, approved, rejected). Значение, которого нет ни в одном списке,
+#   не угадывается: DataMapper помечает его как требующее ручного решения.
 
-in_progress:
-  - pending
-  - processing
-  - created
-  - new
-  - waiting
-  - in_progress
-  - queued
+field_names:
+  - status
+  - state
+  - payment_status
+  - transfer_status
+  - operation_status
 
-approved:
-  - completed
-  - success
-  - succeeded
-  - paid
-  - approved
-  - done
-  - confirmed
+canonical:
+  in_progress:
+    - pending
+    - processing
+    - created
+    - new
+    - waiting
+    - in_progress
+    - queued
+    - accepted
+    - sent
+    - registered
 
-rejected:
-  - failed
-  - error
-  - declined
-  - cancelled
-  - canceled
-  - void
-  - rejected
-  - expired
+  approved:
+    - completed
+    - success
+    - succeeded
+    - paid
+    - approved
+    - done
+    - confirmed
+
+  rejected:
+    - failed
+    - error
+    - declined
+    - cancelled
+    - canceled
+    - void
+    - rejected
+    - expired

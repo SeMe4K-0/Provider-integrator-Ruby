@@ -90,12 +90,12 @@ RSpec.describe ProviderIntegrator::Pipeline do
       expect(docs).to include("не найден заголовок с подписью")
     end
 
-    it "оставляет TODO для полей, которых нет в спецификации" do
+    it "сообщает в документации о том, что осталось нераспознанным" do
       generate(spec_path: no_webhook_spec, provider: "bankex")
       docs = File.read(File.join(@output_dir, "INTEGRATION.md"))
 
       expect(docs).to include("Требует ручного решения")
-      expect(docs).to include("не найдено ни одно из известных имён")
+      expect(docs).to include("не найден заголовок с подписью")
     end
   end
 

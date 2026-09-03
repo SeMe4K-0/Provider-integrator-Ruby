@@ -32,6 +32,7 @@ module ProviderIntegrator
     end
 
     def map
+      @status_field = detect_status_field
       status_map = map_statuses
       error_map = map_errors
       fields = map_fields
@@ -39,6 +40,7 @@ module ProviderIntegrator
 
       MappingResult.new(
         report: @report,
+        status_field: @status_field&.fetch(:name),
         status_map: status_map,
         error_map: error_map,
         fields: fields,
@@ -59,14 +61,16 @@ module ProviderIntegrator
     end
 
     def map_statuses
-      enum = status_enum
-      if enum.nil? || enum.empty?
-        @report.add_unresolved(:status, "(поле status)",
-                                "в схемах спецификации не найдено поле status с перечислением значений")
+      if @status_field.nil?
+        @report.add_unresolved(:status, "(поле статуса)",
+                                "ни одно из имён #{Array(@statuses_rules['field_names']).join(', ')} " \
+                                "не найдено в схемах с перечислением значений")
         return {}
       end
 
-      enum.each_with_object({}) do |value, acc|
+      @report.add_resolved(:status, "(поле статуса)", "статус читается из поля \"#{@status_field[:name]}\"")
+
+      @status_field[:enum].each_with_object({}) do |value, acc|
         canonical = canonical_status(value)
         if canonical
           @report.add_resolved(:status, value, "→ #{canonical}")
@@ -80,15 +84,18 @@ module ProviderIntegrator
 
     def canonical_status(value)
       normalized = value.to_s.downcase
-      @statuses_rules.each do |canonical, synonyms|
+      Hash(@statuses_rules["canonical"]).each do |canonical, synonyms|
         return canonical if Array(synonyms).map(&:downcase).include?(normalized)
       end
       nil
     end
 
-    # Ищет поле с именем "status" (без учёта регистра) среди всех components/schemas
-    # и возвращает его enum, если он есть
-    def status_enum
+    # Имя поля статуса у разных провайдеров отличается (status, state и т.д.),
+    # поэтому оно ищется по списку из statuses.yml, а не берётся жёстко.
+    # Подходит первое поле с известным именем и перечислением значений.
+    def detect_status_field
+      candidates = Array(@statuses_rules["field_names"]).map(&:downcase)
+
       Hash(@spec_model.schemas).each_value do |schema|
         next unless schema.is_a?(Hash)
 
@@ -96,10 +103,10 @@ module ProviderIntegrator
         next unless props.is_a?(Hash)
 
         props.each do |name, prop_schema|
-          next unless name.downcase == "status" && prop_schema.is_a?(Hash)
+          next unless candidates.include?(name.downcase) && prop_schema.is_a?(Hash)
+          next unless prop_schema["enum"].is_a?(Array)
 
-          enum = prop_schema["enum"]
-          return enum if enum.is_a?(Array)
+          return { name: name, enum: prop_schema["enum"] }
         end
       end
       nil
@@ -136,17 +143,38 @@ module ProviderIntegrator
       end
 
       properties = collect_properties(create_endpoint.request_body_schema)
-      @field_rules.each_key.with_object({}) do |canonical, acc|
-        aliases = Array(@field_rules[canonical]).map(&:downcase)
-        match = properties.find { |prop| aliases.include?(prop[:name].downcase) }
+      fields = {}
+      match_group(Hash(@field_rules["required"]), properties, fields, required: true)
+      match_group(Hash(@field_rules["optional"]), properties, fields, required: false)
+      check_recipient_present(fields)
+      fields
+    end
+
+    # Обязательное поле без соответствия — проблема; необязательное относится
+    # к чужому способу выплаты, его отсутствие ожидаемо и помечается нейтрально
+    def match_group(rules, properties, fields, required:)
+      rules.each do |canonical, aliases|
+        names = Array(aliases).map(&:downcase)
+        match = properties.find { |prop| names.include?(prop[:name].downcase) }
 
         if match
           @report.add_resolved(:field, canonical, "поле #{match[:path].join('.')}")
-          acc[canonical] = match
+          fields[canonical] = match
+        elsif required
+          @report.add_unresolved(:field, canonical, "обязательное поле не найдено в схеме запроса")
         else
-          @report.add_unresolved(:field, canonical, "не найдено ни одно из известных имён в схеме запроса")
+          @report.add_skipped(:field, canonical, "не используется этим провайдером")
         end
       end
+    end
+
+    # Хотя бы один реквизит получателя должен быть найден, иначе выплату
+    # некуда отправлять — это уже требует ручного решения
+    def check_recipient_present(fields)
+      return if fields.keys.any? { |canonical| canonical.start_with?("recipient_") }
+
+      @report.add_unresolved(:field, "(реквизиты получателя)",
+                              "в схеме запроса не найдено ни одного известного поля реквизитов получателя")
     end
 
     # Собирает свойства тела запроса с сохранением пути до каждого поля.

@@ -19,6 +19,12 @@ module ProviderIntegrator
       @entries << Entry.new(category: category, key: key, status: :unresolved, detail: detail)
     end
 
+    # Элемент, которого в спецификации нет и не должно быть: необязательное поле
+    # чужого способа выплаты. Не требует действий, но остаётся виден в отчёте.
+    def add_skipped(category, key, detail)
+      @entries << Entry.new(category: category, key: key, status: :skipped, detail: detail)
+    end
+
     def entries
       @entries
     end
@@ -29,6 +35,10 @@ module ProviderIntegrator
 
     def unresolved
       @entries.select { |e| e.status == :unresolved }
+    end
+
+    def skipped
+      @entries.select { |e| e.status == :skipped }
     end
   end
 end

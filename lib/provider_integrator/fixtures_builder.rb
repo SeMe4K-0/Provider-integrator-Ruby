@@ -63,7 +63,7 @@ module ProviderIntegrator
     def canonical_status(payload)
       return nil unless payload.is_a?(Hash)
 
-      status = payload["status"] || payload["event"].to_s.split(".").last
+      status = payload[@mapping.status_field.to_s] || payload["event"].to_s.split(".").last
       @mapping.status_map[status.to_s]
     end
 

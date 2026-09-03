@@ -1,0 +1,113 @@
+{
+  "create_request": {
+    "request": {
+      "amount": 1500000,
+      "currency": "RUB",
+      "external_id": "op_abc123",
+      "recipient": {
+        "type": "sbp",
+        "phone": "79001234567",
+        "bank_code": "044525225",
+        "bank_name": "Сбербанк"
+      }
+    },
+    "response_201": {
+      "id": "np_7f3a9b2c",
+      "external_id": "op_abc123",
+      "status": "pending",
+      "amount": 1500000,
+      "currency": "RUB",
+      "created_at": "2026-07-30T10:00:00Z"
+    },
+    "response_401": {
+      "error": {
+        "code": "unauthorized",
+        "message": "Invalid API key"
+      }
+    },
+    "response_402": {
+      "error": {
+        "code": "insufficient_balance",
+        "message": "Insufficient provider balance"
+      }
+    },
+    "response_422": {
+      "error": {
+        "code": "validation_error",
+        "message": "Amount must be at least 100000 kopecks",
+        "details": [
+          {
+            "field": "amount",
+            "message": "minimum is 100000"
+          }
+        ]
+      }
+    },
+    "response_429": {
+      "error": {
+        "code": "rate_limit_exceeded",
+        "message": "Rate limit exceeded, retry after 60 seconds"
+      }
+    }
+  },
+  "fetch_status": {
+    "response_200": {
+      "id": "np_7f3a9b2c",
+      "external_id": "op_abc123",
+      "status": "pending",
+      "amount": 1500000,
+      "currency": "RUB",
+      "recipient": {
+        "type": "sbp",
+        "phone": "79001234567",
+        "bank_code": "044525225",
+        "bank_name": "Сбербанк",
+        "card_number": "4111111111111111"
+      },
+      "error": {
+        "code": "validation_error",
+        "message": "string"
+      },
+      "created_at": "2026-01-01T00:00:00Z",
+      "completed_at": "2026-01-01T00:00:00Z"
+    }
+  },
+  "callback": {
+    "payload": {
+      "event": "payout.completed",
+      "payout_id": "np_7f3a9b2c",
+      "external_id": "op_abc123",
+      "status": "completed",
+      "completed_at": "2026-07-30T10:05:00Z"
+    },
+    "expected_operation_status": "approved"
+  },
+  "callback_failed": {
+    "payload": {
+      "event": "payout.failed",
+      "payout_id": "np_7f3a9b2c",
+      "external_id": "op_abc123",
+      "status": "failed",
+      "error": {
+        "code": "recipient_not_found",
+        "message": "Recipient account not found"
+      }
+    },
+    "expected_operation_status": "rejected"
+  },
+  "edge_cases": {
+    "amount_below_minimum": {
+      "amount": 999,
+      "expected": "check_conditions отклоняет операцию с кодом amount_too_low"
+    },
+    "invalid_signature": {
+      "signature": "0000000000000000000000000000000000000000000000000000000000000000",
+      "expected": "process_callback возвращает provider.invalid_signature"
+    },
+    "provider_error_500": {
+      "http_code": 500,
+      "expected_code": "internal_error",
+      "expected_action": "alert_and_retry"
+    }
+  }
+}
