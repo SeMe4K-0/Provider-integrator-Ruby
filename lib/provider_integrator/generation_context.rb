@@ -18,6 +18,7 @@ module ProviderIntegrator
       @analysis = analysis
       @mapping = mapping
       @sources = YAML.load_file(File.join(rules_dir, "operation_sources.yml"))
+      @heuristics = YAML.load_file(File.join(rules_dir, "heuristics.yml"))
       @payload_todos = []
     end
 
@@ -138,14 +139,23 @@ module ProviderIntegrator
       substitute_path(cancel_endpoint)
     end
 
+    # Схема авторизации берётся та, которую требует эндпоинт создания, а не
+    # первая объявленная: у провайдера их может быть несколько
+    def auth_scheme
+      return @auth_scheme if defined?(@auth_scheme)
+
+      required = Array(create_endpoint&.security_names).first || Array(status_endpoint&.security_names).first
+      @auth_scheme = spec.security_schemes[required] || spec.security_schemes.values.first
+    end
+
     # Выражение, формирующее заголовки авторизации в сгенерированном сервисе
     def auth_headers_expression
-      scheme = spec.security_schemes.values.first
+      scheme = auth_scheme
       return "{}" if scheme.nil?
 
       case scheme.type
       when "apiKey"
-        %({ "#{scheme.header_name}" => credentials.fetch(:api_key) })
+        scheme.location == "header" ? %({ "#{scheme.header_name}" => credentials.fetch(:api_key) }) : "{}"
       when "http"
         scheme.scheme == "bearer" ? bearer_expression : basic_expression
       else
@@ -153,14 +163,33 @@ module ProviderIntegrator
       end
     end
 
+    # Ключ, объявленный с in: query, заголовком не передать — он добавляется
+    # к адресу запроса
+    def auth_query_parameter
+      scheme = auth_scheme
+      scheme && scheme.type == "apiKey" && scheme.location == "query" ? scheme.header_name : nil
+    end
+
+    # Схемы, для которых генератор не умеет собрать авторизацию (oauth2,
+    # openIdConnect, http digest): запрос ушёл бы без неё, поэтому в коде
+    # остаётся явный TODO, а не молчаливый пустой хеш
+    def unsupported_auth
+      scheme = auth_scheme
+      return nil if scheme.nil?
+      return nil if scheme.type == "apiKey"
+      return nil if scheme.type == "http" && %w[bearer basic].include?(scheme.scheme.to_s)
+
+      "#{scheme.name} (#{scheme.type}#{scheme.scheme ? "/#{scheme.scheme}" : ''})"
+    end
+
     # Ключи credentials, которые действительно читает сгенерированный сервис
     def credential_keys
-      scheme = spec.security_schemes.values.first
+      scheme = auth_scheme
       keys = case scheme&.type
              when "http"
                scheme.scheme == "bearer" ? { "token" => "Bearer-токен" } : { "basic_token" => "Basic-токен" }
              when "apiKey"
-               { "api_key" => "ключ API, заголовок #{scheme.header_name}" }
+               { "api_key" => "ключ API, #{scheme.location == 'query' ? 'параметр' : 'заголовок'} #{scheme.header_name}" }
              else
                {}
              end
@@ -169,14 +198,37 @@ module ProviderIntegrator
     end
 
     def auth_comment
-      scheme = spec.security_schemes.values.first
+      scheme = auth_scheme
       return "авторизация в спецификации не описана" if scheme.nil?
 
-      "#{scheme.name} (#{scheme.type}#{scheme.header_name ? ", заголовок #{scheme.header_name}" : ''})"
+      place = scheme.type == "apiKey" ? ", #{scheme.location == 'query' ? 'параметр запроса' : 'заголовок'} #{scheme.header_name}" : ""
+      "#{scheme.name} (#{scheme.type}#{place})"
     end
 
     def provider_id_field
       mapping.provider_id_field || "id"
+    end
+
+    # Заголовок идемпотентности, если провайдер его принимает: без него повтор
+    # запроса создаст вторую выплату
+    def idempotency_header_name
+      header = create_endpoint&.parameters&.find do |parameter|
+        parameter.location == "header" && parameter.name.to_s.downcase.include?("idempotency")
+      end
+      header&.name
+    end
+
+    # Прочие обязательные заголовки эндпоинта создания: их отсутствие —
+    # гарантированный отказ провайдера, поэтому они попадают в код с TODO
+    def required_header_params
+      Array(create_endpoint&.parameters).select do |parameter|
+        parameter.location == "header" && parameter.required? &&
+          parameter.name != idempotency_header_name && !auth_header_names.include?(parameter.name)
+      end
+    end
+
+    def auth_header_names
+      spec.security_schemes.values.filter_map(&:header_name)
     end
 
     def webhook_id_field
@@ -326,6 +378,12 @@ module ProviderIntegrator
       fixtures["fetch_status"]&.keys&.first
     end
 
+    # Для проверки обработки ошибок берётся код, который клиент возвращает
+    # обычным ответом: 401 и 429 поднимаются исключениями и проверяются иначе
+    def testable_error
+      error_map.find { |code, _| ![401, 429].include?(code) }
+    end
+
     # Обращение к телефону получателя в теле запроса: у одного провайдера он
     # лежит во вложенном объекте реквизитов, у другого — прямо в корне
     def recipient_phone_access
@@ -366,8 +424,34 @@ module ProviderIntegrator
     def payload_tree
       @payload_todos = []
       mapping.fields.each_with_object({}) do |(canonical, entry), tree|
+        next if foreign_method_field?(entry)
+
         insert_by_path(tree, entry[:path], value_expression(canonical, entry))
       end
+    end
+
+    # Реквизиты разных способов выплаты нельзя отправлять одним запросом:
+    # если выбран СБП, номер карты в теле запроса приведёт к отказу провайдера.
+    # Принадлежность поля определяется по его описанию (config/rules/heuristics.yml).
+    def foreign_method_field?(entry)
+      method = requisite_type
+      return false if method.nil?
+
+      owner = field_method(entry)
+      return false if owner.nil? || owner == method
+
+      @payload_todos << "поле #{entry[:path].join('.')} относится к способу выплаты \"#{owner}\", " \
+                        "а выбран \"#{method}\" — в запрос не включено"
+      true
+    end
+
+    def field_method(entry)
+      text = entry[:schema].is_a?(Hash) ? "#{entry[:name]} #{entry[:schema]['description']}".downcase : ""
+
+      Hash(@heuristics["payout_methods"]).each do |method, keywords|
+        return method if Array(keywords).any? { |keyword| text.include?(keyword.to_s.downcase) }
+      end
+      nil
     end
 
     # Путь поля может конфликтовать с уже занятым: например, amount записан

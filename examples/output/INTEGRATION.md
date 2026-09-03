@@ -43,10 +43,22 @@
 | 401 | invalid_credentials | alert_and_block |
 | 402 | insufficient_balance | retry |
 | 404 | not_found | reject |
-| 409 | conflict | reject |
+| 409 | duplicate_request | fetch_status |
 | 422 | validation_error | reject |
 | 429 | rate_limit | retry_backoff |
 | 500 | internal_error | alert_and_retry |
+
+Провайдер дополнительно возвращает собственный код в теле ошибки. Один и тот же
+HTTP-статус может означать разные причины, поэтому код стоит логировать и разбирать
+отдельно:
+
+- `validation_error`
+- `insufficient_balance`
+- `recipient_not_found`
+- `bank_unavailable`
+- `amount_limit_exceeded`
+- `rate_limit_exceeded`
+- `internal_error`
 
 ## Тело запроса на создание операции
 
@@ -61,8 +73,7 @@
     type: "sbp",
     phone: operation.payout_requisite.dig("sbp", "phone"),
     bank_code: operation.payout_requisite.dig("sbp", "bank_code"),
-    bank_name: operation.payout_requisite.dig("sbp", "bank_name"),
-    card_number: operation.payout_requisite.dig("card", "number")
+    bank_name: operation.payout_requisite.dig("sbp", "bank_name")
   }.compact
 }
 ```

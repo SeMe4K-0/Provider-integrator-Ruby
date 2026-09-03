@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "yaml"
+
 require_relative "spec_loader"
 require_relative "analysis_result"
 require_relative "ir/endpoint"
@@ -16,14 +18,15 @@ module ProviderIntegrator
   # разбирается — это отдельный механизм, не отражённый в IR Части 1. Лучше явно
   # не поддерживать его, чем притвориться, что он учтён.
   class SemanticAnalyzer
-    WEBHOOK_KEYWORDS = %w[webhook callback notification notify].freeze
+    DEFAULT_RULES_DIR = File.expand_path("../../config/rules", __dir__)
 
-    def self.analyze(spec_model)
-      new(spec_model).analyze
+    def self.analyze(spec_model, rules_dir: DEFAULT_RULES_DIR)
+      new(spec_model, rules_dir).analyze
     end
 
-    def initialize(spec_model)
+    def initialize(spec_model, rules_dir = DEFAULT_RULES_DIR)
       @spec_model = spec_model
+      @rules = YAML.load_file(File.join(rules_dir, "heuristics.yml"))
     end
 
     def analyze
@@ -56,11 +59,15 @@ module ProviderIntegrator
     end
 
     def cancel?(endpoint)
-      %w[post put patch].include?(endpoint.http_method) && endpoint.path.downcase.end_with?("/cancel")
+      rule = Hash(@rules.dig("roles", "cancel"))
+      return false unless Array(rule["methods"]).include?(endpoint.http_method)
+
+      last_segment = endpoint.path.downcase.split("/").last.to_s
+      Array(rule["path_suffix"]).any? { |suffix| last_segment == suffix.to_s.downcase }
     end
 
     def webhook?(endpoint)
-      return false unless endpoint.http_method == "post"
+      return false unless Array(@rules.dig("roles", "webhook", "methods")).include?(endpoint.http_method)
       return true if name_suggests_webhook?(endpoint)
 
       # Признак «публичный POST с телом» имеет смысл только там, где спецификация
@@ -76,7 +83,7 @@ module ProviderIntegrator
 
     def name_suggests_webhook?(endpoint)
       text = "#{endpoint.path} #{endpoint.operation_id}".downcase
-      WEBHOOK_KEYWORDS.any? { |keyword| text.include?(keyword) }
+      Array(@rules.dig("roles", "webhook", "keywords")).any? { |keyword| text.include?(keyword.to_s.downcase) }
     end
 
     # Спецификация объявляет схемы авторизации и хотя бы один эндпоинт их требует:

@@ -1,0 +1,51 @@
+# Признаки, по которым определяются роли эндпоинтов, заголовок подписи,
+# единицы суммы и способ выплаты. Раньше всё это было константами в коде;
+# здесь их можно дополнять под конкретного провайдера, не трогая Ruby.
+
+# Роль эндпоинта. Проверяются: последний сегмент пути (path_suffix),
+# вхождение в путь или operationId (keywords), HTTP-методы (methods).
+roles:
+  cancel:
+    methods: [post, put, patch, delete]
+    path_suffix: [cancel, void, abort, revoke]
+  webhook:
+    methods: [post]
+    keywords: [webhook, callback, notification, notify]
+
+# Заголовок с подписью входящего уведомления
+signature_header_keywords:
+  - signature
+  - подпись
+  - sign
+  - hmac
+  - digest
+
+# Признаки того, что сумма задана в минорных единицах (копейки, центы).
+# Однословные значения сравниваются по границе слова, поэтому "cent"
+# не срабатывает внутри "percent".
+minor_units:
+  - копе
+  - kopeck
+  - cent
+  - цент
+  - minor unit
+  - smallest unit
+  - smallest currency unit
+  - мин. ед
+
+# Принадлежность поля к способу выплаты: если в описании поля указан способ,
+# отличный от выбранного, поле не попадает в тело запроса — провайдер
+# отклонит запрос с реквизитами двух разных способов сразу.
+payout_methods:
+  sbp:
+    - sbp
+    - сбп
+  card:
+    - card
+    - карт
+    - pan
+  account:
+    - account
+    - счёт
+    - счет
+    - iban

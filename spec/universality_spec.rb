@@ -36,8 +36,8 @@ RSpec.describe "универсальность генератора" do
       expect(mapping.signature.encoding).to eq("base64")
     end
 
-    it "сопоставляет merchant_id с external_id по словарю синонимов" do
-      expect(mapping.fields.dig("external_id", :name)).to eq("merchant_id")
+    it "сопоставляет order_id с external_id по словарю синонимов" do
+      expect(mapping.fields.dig("external_id", :name)).to eq("order_id")
     end
 
     it "не додумывает неоднозначный статус manual_review" do

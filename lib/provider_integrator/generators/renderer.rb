@@ -19,9 +19,21 @@ module ProviderIntegrator
         path = File.join(TEMPLATES_DIR, template_name)
         raise GenerationError, "Не найден шаблон #{template_name}" unless File.exist?(path)
 
+        render_template(path, template_name)
+      end
+
+      private
+
+      # Собственная ошибка не заворачивается сама в себя, а трейс исходного
+      # исключения сохраняется: без него отладку шаблона вести вслепую
+      def render_template(path, template_name)
         ERB.new(File.read(path), trim_mode: "-").result(@context.get_binding)
+      rescue GenerationError
+        raise
       rescue StandardError => e
-        raise GenerationError, "Ошибка в шаблоне #{template_name}: #{e.class} — #{e.message}"
+        error = GenerationError.new("Ошибка в шаблоне #{template_name}: #{e.class} — #{e.message}")
+        error.set_backtrace(e.backtrace)
+        raise error
       end
     end
   end

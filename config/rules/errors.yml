@@ -7,7 +7,10 @@
 402: { code: insufficient_balance, action: retry }
 403: { code: forbidden,            action: alert_and_block }
 404: { code: not_found,            action: reject }
-409: { code: conflict,             action: reject }
+# 409 у платёжных провайдеров обычно означает не ошибку, а повтор запроса
+# с тем же ключом идемпотентности: операция уже создана, и в теле приходит
+# она же. Отклонять её нельзя — нужно перечитать статус.
+409: { code: duplicate_request,    action: fetch_status }
 422: { code: validation_error,     action: reject }
 429: { code: rate_limit,           action: retry_backoff }
 500: { code: internal_error,       action: alert_and_retry }

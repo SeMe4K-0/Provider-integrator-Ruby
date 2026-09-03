@@ -15,7 +15,6 @@ module ProviderIntegrator
   # как unresolved с объяснением причины, а генератор оставляет в этом месте TODO.
   class DataMapper
     DEFAULT_RULES_DIR = File.expand_path("../../config/rules", __dir__)
-    UNIT_KEYWORDS = %w[копе kopeck cent центы].freeze
 
     def self.map(spec_model, analysis, rules_dir: DEFAULT_RULES_DIR)
       new(spec_model, analysis, rules_dir).map
@@ -28,15 +27,20 @@ module ProviderIntegrator
       @statuses_rules = load_rules("statuses.yml")
       @errors_rules = load_rules("errors.yml")
       @field_rules = load_rules("field_aliases.yml")
+      @amount_rules = load_rules("heuristics.yml")
       @report = MappingReport.new
     end
 
     def map
       @status_field = detect_status_field
+      report_parser_notes
+      report_role_ambiguity
+      report_unsupported_endpoints
       status_map = map_statuses
       error_map = map_errors
       fields = map_fields
       amount = map_amount(fields)
+      currency = detect_currency(fields)
       report_webhook_confidence
 
       MappingResult.new(
@@ -44,11 +48,12 @@ module ProviderIntegrator
         status_field: @status_field&.fetch(:name),
         status_map: status_map,
         error_map: error_map,
+        provider_error_codes: detect_provider_error_codes,
         fields: fields,
         amount_factor: amount[:factor],
         amount_confirmed: amount[:confirmed],
         min_amount: detect_min_amount(fields, amount[:factor]),
-        currency: detect_currency(fields),
+        currency: currency,
         provider_id_field: detect_provider_id_field,
         webhook_id_field: detect_webhook_id_field,
         signature: SignatureDetector.detect(@analysis, rules_dir: @rules_dir, report: @report)
@@ -59,6 +64,36 @@ module ProviderIntegrator
 
     def load_rules(file_name)
       YAML.load_file(File.join(@rules_dir, file_name))
+    end
+
+    # Замечания стадии разбора: слитые композиции, выбранные варианты oneOf,
+    # неожиданные типы содержимого
+    def report_parser_notes
+      Array(@spec_model.notes).each { |note| @report.add_unresolved(:spec, "(разбор)", note) }
+    end
+
+    # Если на одну роль претендует несколько эндпоинтов, берётся первый по
+    # порядку в спецификации — это допущение, и оно не должно быть молчаливым
+    def report_role_ambiguity
+      { create: "создания операции", status: "запроса статуса", cancel: "отмены" }.each do |role, title|
+        candidates = @analysis.by_role(role)
+        next if candidates.size < 2
+
+        @report.add_unresolved(:role, "(#{role})",
+                                "на роль #{title} претендуют #{candidates.map(&:to_s).join(', ')} — " \
+                                "взят первый, проверьте выбор")
+      end
+    end
+
+    # Эндпоинты, не попавшие ни в одну роль контракта, в сервис не превращаются.
+    # Молчать об этом нельзя: провайдер может считать их обязательными.
+    def report_unsupported_endpoints
+      others = @analysis.by_role(:other)
+      return if others.empty?
+
+      @report.add_skipped(:endpoint, "(вне контракта)",
+                           "#{others.map(&:to_s).join(', ')} — не относятся к контракту Provider::BaseService " \
+                           "и в сервис не генерируются")
     end
 
     # Вебхук, опознанный только по косвенному признаку, — не факт, а догадка:
@@ -142,6 +177,27 @@ module ProviderIntegrator
       nil
     end
 
+    # Коды ошибок самого провайдера (enum в схеме ошибки) — отдельная от HTTP
+    # плоскость: один и тот же 422 может означать и неверный телефон,
+    # и превышение лимита. Их перечень попадает в документацию и в сервис.
+    def detect_provider_error_codes
+      names = Array(@errors_rules["provider_code_fields"]).map(&:downcase)
+      names = %w[code error_code reason] if names.empty?
+
+      Hash(@spec_model.schemas).each_value do |schema|
+        next unless schema.is_a?(Hash)
+
+        Hash(schema["properties"]).each do |name, prop|
+          next unless names.include?(name.downcase) && prop.is_a?(Hash)
+          next unless prop["enum"].is_a?(Array)
+
+          @report.add_resolved(:error, "(коды провайдера)", "#{prop['enum'].size} значений: #{prop['enum'].join(', ')}")
+          return prop["enum"]
+        end
+      end
+      []
+    end
+
     def map_errors
       http_codes.each_with_object({}) do |code, acc|
         rule = @errors_rules[code] || @errors_rules[code.to_s]
@@ -177,7 +233,28 @@ module ProviderIntegrator
       match_group(Hash(@field_rules["required"]), properties, fields, required: true)
       match_group(Hash(@field_rules["optional"]), properties, fields, required: false)
       check_recipient_present(fields)
+      report_unknown_fields(properties, fields)
       fields
+    end
+
+    # Сопоставление идёт от словаря к спецификации, поэтому поле провайдера,
+    # которого нет в словаре, иначе просто исчезло бы: ни в теле запроса,
+    # ни в отчёте. Обязательное по спецификации — требует решения, остальные —
+    # к сведению.
+    def report_unknown_fields(properties, fields)
+      matched = fields.values.map { |entry| entry[:path] }
+      unknown = properties.reject { |property| matched.include?(property[:path]) || property[:object] }
+
+      unknown.each do |property|
+        name = property[:path].join(".")
+        if property[:required]
+          @report.add_unresolved(:field, name,
+                                  "обязательное поле провайдера не описано в config/rules/field_aliases.yml " \
+                                  "и не попадёт в запрос")
+        else
+          @report.add_skipped(:field, name, "поле провайдера не описано в словаре и не отправляется")
+        end
+      end
     end
 
     # Обязательное поле без соответствия — проблема; необязательное относится
@@ -215,8 +292,13 @@ module ProviderIntegrator
 
       Hash(schema["properties"]).flat_map do |name, prop|
         path = prefix + [name]
-        entry = { name: name, path: path, schema: prop, required: required?(schema, name) }
         nested = prefix.empty? ? collect_properties(prop, path) : []
+        # Узел-контейнер (recipient, destination) сам значением не является:
+        # он помечается, чтобы не попасть в список неизвестных полей
+        entry = {
+          name: name, path: path, schema: prop,
+          required: required?(schema, name), object: !nested.empty?
+        }
         [entry] + nested
       end
     end
@@ -232,7 +314,7 @@ module ProviderIntegrator
       return { factor: 1, confirmed: false } if entry.nil?
 
       description = entry[:schema].is_a?(Hash) ? entry[:schema]["description"].to_s.downcase : ""
-      if UNIT_KEYWORDS.any? { |keyword| description.include?(keyword) }
+      if minor_units?(description)
         @report.add_resolved(:field, "amount.unit", "минорные единицы (копейки/центы) — конвертация ×100")
         { factor: 100, confirmed: true }
       else
@@ -242,20 +324,47 @@ module ProviderIntegrator
       end
     end
 
+    # Сравнение идёт по границам слов: подстрока «cent» иначе находится
+    # внутри «percent» и даёт ложную конвертацию суммы в сто раз
+    def minor_units?(description)
+      Array(@amount_rules["minor_units"]).any? do |keyword|
+        keyword = keyword.to_s.downcase
+        keyword.match?(/\A\p{L}+\z/) ? description.match?(/(?<!\p{L})#{Regexp.escape(keyword)}/) : description.include?(keyword)
+      end
+    end
+
     # Минимальная сумма операции в единицах Space Payments: minimum из спецификации,
-    # приведённый обратно к мажорным единицам, если провайдер принимает минорные
+    # приведённый обратно к мажорным единицам. Деление рациональное: при minimum 150
+    # и коэффициенте 100 порог равен 1.5, а не 1.
     def detect_min_amount(fields, factor)
       entry = fields["amount"]
       minimum = entry && entry[:schema].is_a?(Hash) ? entry[:schema]["minimum"] : nil
       return nil unless minimum.is_a?(Numeric)
 
-      minimum / factor
+      if factor == 1
+        @report.add_unresolved(:field, "amount.minimum",
+                                "порог #{minimum} взят из спецификации, но единицы суммы не подтверждены — " \
+                                "проверьте, что он в тех же единицах, что operation.amount")
+        return minimum
+      end
+
+      value = Rational(minimum, factor)
+      value.denominator == 1 ? value.numerator : value.to_f
     end
 
     def detect_currency(fields)
       entry = fields["currency"]
       enum = entry && entry[:schema].is_a?(Hash) ? entry[:schema]["enum"] : nil
-      enum.is_a?(Array) ? enum.first : nil
+      return nil unless enum.is_a?(Array) && !enum.empty?
+
+      if enum.size == 1
+        @report.add_resolved(:field, "currency.value", "провайдер принимает только #{enum.first}")
+      else
+        @report.add_unresolved(:field, "currency.value",
+                                "провайдер принимает #{enum.join(', ')} — в конфигурации шлюза указана #{enum.first}, " \
+                                "сумма отправляется с operation.currency")
+      end
+      enum.first
     end
 
     def detect_provider_id_field

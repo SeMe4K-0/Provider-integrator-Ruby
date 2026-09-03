@@ -11,8 +11,6 @@ module ProviderIntegrator
   class SignatureDetector
     Scheme = Struct.new(:header_name, :algorithm, :encoding, :confirmed, keyword_init: true)
 
-    HEADER_KEYWORDS = %w[signature подпись sign hmac digest].freeze
-
     def self.detect(analysis, rules_dir:, report:)
       new(analysis, rules_dir, report).detect
     end
@@ -20,6 +18,7 @@ module ProviderIntegrator
     def initialize(analysis, rules_dir, report)
       @analysis = analysis
       @rules = YAML.load_file(File.join(rules_dir, "signature_schemes.yml"))
+      @header_keywords = Array(YAML.load_file(File.join(rules_dir, "heuristics.yml"))["signature_header_keywords"])
       @report = report
     end
 
@@ -41,7 +40,7 @@ module ProviderIntegrator
 
     def signature_like?(parameter)
       text = "#{parameter.name} #{parameter.description}".downcase
-      HEADER_KEYWORDS.any? { |keyword| text.include?(keyword) }
+      @header_keywords.any? { |keyword| text.include?(keyword.to_s.downcase) }
     end
 
     def build_scheme(header)

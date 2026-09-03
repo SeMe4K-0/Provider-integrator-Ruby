@@ -73,7 +73,7 @@ class Provider
 <% end -%>
 <% if create_path -%>
     def create_request(operation, request_method = "create")
-      response = client.post("#{base_url}<%= create_path %>", json: build_payload(operation), headers: auth_headers)
+      response = client.post(url_for("<%= create_path %>"), json: build_payload(operation), headers: create_headers(operation))
       parse_create_response(operation, response)
     rescue Provider::RateLimitError
       failure(:too_many_requests, "provider.rate_limit")
@@ -84,7 +84,7 @@ class Provider
 <% end -%>
 <% if status_path -%>
     def fetch_status(operation)
-      response = client.get("#{base_url}<%= status_path %>", headers: auth_headers)
+      response = client.get(url_for("<%= status_path %>"), headers: auth_headers)
       return failure(*error_for(response.code)) unless response.success?
       return failure(:unprocessable_entity, "provider.malformed_response") unless response.body.is_a?(Hash)
 
@@ -98,7 +98,7 @@ class Provider
 <% end -%>
 <% if cancel_path -%>
     def cancel_request(operation)
-      response = client.post("#{base_url}<%= cancel_path %>", json: {}, headers: auth_headers)
+      response = client.post(url_for("<%= cancel_path %>"), json: {}, headers: auth_headers)
       return failure(*error_for(response.code)) unless response.success?
       return failure(:unprocessable_entity, "provider.malformed_response") unless response.body.is_a?(Hash)
 
@@ -141,10 +141,45 @@ class Provider
       ENV.fetch("<%= env_var_name %>", BASE_URL)
     end
 
+    # Адрес запроса<% if auth_query_parameter %> с добавленным ключом авторизации<% end %>
+    def url_for(path)
+<% if auth_query_parameter -%>
+      with_auth_query("#{base_url}#{path}")
+<% else -%>
+      "#{base_url}#{path}"
+<% end -%>
+    end
+
     # Заголовки авторизации: <%= auth_comment %>
+<% if unsupported_auth -%>
+    # TODO: схема <%= unsupported_auth %> генератором не поддержана — заполните заголовки вручную,
+    # иначе запросы уйдут без авторизации
+<% end -%>
     def auth_headers
       <%= auth_headers_expression %>
     end
+<% if auth_query_parameter -%>
+
+    # Ключ передаётся параметром запроса, а не заголовком
+    def with_auth_query(url)
+      separator = url.include?("?") ? "&" : "?"
+      "#{url}#{separator}<%= auth_query_parameter %>=#{credentials.fetch(:api_key)}"
+    end
+<% end -%>
+<% if create_path -%>
+
+    # Заголовки запроса на создание операции
+<% if idempotency_header_name -%>
+    # Ключ идемпотентности берётся из идентификатора операции: повторная отправка
+    # того же запроса не создаст у провайдера вторую выплату
+<% end -%>
+<% required_header_params.each do |parameter| -%>
+    # TODO: провайдер требует заголовок <%= parameter.name %> (<%= parameter.description || 'описание не задано' %>) — задайте значение
+<% end -%>
+    def create_headers(operation)
+      auth_headers<% if idempotency_header_name %>.merge("<%= idempotency_header_name %>" => operation.id.to_s)<% end %>
+    end
+<% end -%>
 
 <% payload_todos.each do |todo| -%>
     # TODO: <%= todo %>
@@ -157,6 +192,9 @@ class Provider
     end
 
     def parse_create_response(operation, response)
+      # Повтор с тем же ключом идемпотентности возвращает уже созданную
+      # операцию, а не ошибку: её нужно принять, а не отклонить
+      return parse_duplicate(operation, response) if error_action(response.code) == "fetch_status"
       return failure(*error_for(response.code)) unless response.success?
       return failure(:unprocessable_entity, "provider.malformed_response") unless response.body.is_a?(Hash)
 
@@ -206,6 +244,13 @@ class Provider
 
     def error_action(http_code)
       ERROR_MAP.dig(http_code, :action) || "alert_and_retry"
+    end
+
+    def parse_duplicate(operation, response)
+      return failure(:conflict, "provider.duplicate_request") unless response.body.is_a?(Hash)
+
+      operation.provider_operation_id = response.body["<%= provider_id_field %>"]
+      map_status(response.body["<%= status_field %>"])
     end
 <% if signature -%>
 

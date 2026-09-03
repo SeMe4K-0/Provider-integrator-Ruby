@@ -8,13 +8,14 @@ module ProviderIntegrator
   # где path хранит путь до поля в теле запроса (например ["recipient", "phone"]),
   # чтобы генератор восстановил вложенную структуру, а не плоский список.
   class MappingResult
-    attr_reader :report, :status_field, :status_map, :error_map, :fields, :amount_factor,
-                :amount_confirmed, :min_amount, :currency, :provider_id_field,
-                :webhook_id_field, :signature
+    attr_reader :report, :status_field, :status_map, :error_map, :provider_error_codes,
+                :fields, :amount_factor, :amount_confirmed, :min_amount, :currency,
+                :provider_id_field, :webhook_id_field, :signature
 
-    def initialize(report:, status_field:, status_map:, error_map:, fields:, amount_factor:,
-                    amount_confirmed:, min_amount:, currency:, provider_id_field:,
-                    webhook_id_field:, signature:)
+    def initialize(report:, status_field:, status_map:, error_map:, provider_error_codes:,
+                    fields:, amount_factor:, amount_confirmed:, min_amount:, currency:,
+                    provider_id_field:, webhook_id_field:, signature:)
+      @provider_error_codes = provider_error_codes
       @report = report
       @status_field = status_field
       @status_map = status_map

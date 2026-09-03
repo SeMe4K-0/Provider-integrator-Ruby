@@ -25,8 +25,10 @@ module ProviderIntegrator
       @entries << Entry.new(category: category, key: key, status: :skipped, detail: detail)
     end
 
+    # Копия: внутренний массив наружу не отдаётся, чтобы отчёт нельзя было
+    # изменить со стороны
     def entries
-      @entries
+      @entries.dup
     end
 
     def resolved

@@ -39,7 +39,7 @@ paths:
                 value:
                   amount: 250000
                   currency: USD
-                  merchant_id: "op_991"
+                  order_id: "op_991"
                   destination:
                     type: card
                     pan: "4111111111111111"
@@ -53,7 +53,7 @@ paths:
                 $ref: '#/components/schemas/PaymentResponse'
               example:
                 payment_id: "cp_5521aa"
-                merchant_id: "op_991"
+                order_id: "op_991"
                 state: created
                 amount: 250000
         '401':
@@ -102,7 +102,7 @@ paths:
                 $ref: '#/components/schemas/PaymentResponse'
               example:
                 payment_id: "cp_5521aa"
-                merchant_id: "op_991"
+                order_id: "op_991"
                 state: success
                 amount: 250000
         '404':
@@ -135,13 +135,13 @@ paths:
                 summary: Выплата исполнена
                 value:
                   payment_id: "cp_5521aa"
-                  merchant_id: "op_991"
+                  order_id: "op_991"
                   state: success
               declined:
                 summary: Выплата отклонена
                 value:
                   payment_id: "cp_5521aa"
-                  merchant_id: "op_991"
+                  order_id: "op_991"
                   state: declined
                   error:
                     code: card_blocked
@@ -160,7 +160,7 @@ components:
   schemas:
     CreatePaymentRequest:
       type: object
-      required: [amount, currency, merchant_id, destination]
+      required: [amount, currency, order_id, destination]
       properties:
         amount:
           type: integer
@@ -171,7 +171,7 @@ components:
           type: string
           enum: [USD, EUR]
           example: USD
-        merchant_id:
+        order_id:
           type: string
           description: Идентификатор операции на стороне мерчанта
           maxLength: 64
@@ -197,7 +197,7 @@ components:
       properties:
         payment_id:
           type: string
-        merchant_id:
+        order_id:
           type: string
         state:
           type: string
@@ -207,11 +207,11 @@ components:
 
     CallbackPayload:
       type: object
-      required: [payment_id, status]
+      required: [payment_id, state]
       properties:
         payment_id:
           type: string
-        merchant_id:
+        order_id:
           type: string
         state:
           type: string

@@ -1,0 +1,48 @@
+# Провайдер с полем merchant_id, которого нет в словаре синонимов.
+# У большинства провайдеров это идентификатор мерчанта, а не операции, поэтому
+# генератор не должен принимать его за external_id — но и терять молча тоже.
+openapi: 3.0.3
+info:
+  title: Unknown-field Provider
+  version: "1.0"
+servers:
+  - url: https://api.unknown.example
+paths:
+  /payouts:
+    post:
+      operationId: createPayout
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, merchant_id]
+              properties:
+                amount:
+                  type: integer
+                  description: Сумма в копейках
+                merchant_id:
+                  type: string
+                  description: Идентификатор мерчанта в системе провайдера
+                phone:
+                  type: string
+      responses:
+        '201':
+          description: Создана
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  status: { type: string, enum: [pending, completed] }
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key

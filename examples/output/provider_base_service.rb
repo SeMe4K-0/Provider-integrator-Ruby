@@ -36,6 +36,11 @@ class Provider
   # потому что обрабатываются одинаково для любого запроса; остальные коды
   # возвращаются вызывающему коду как обычный ответ.
   class HttpClient
+    # Платёжный запрос без таймаута может держать поток минутами: значения
+    # заданы явно, а не оставлены на усмотрение Net::HTTP
+    OPEN_TIMEOUT = 5
+    READ_TIMEOUT = 15
+
     class Response
       attr_reader :code, :body
 
@@ -64,9 +69,12 @@ class Provider
       http_request = request_class.new(uri, headers.merge("Content-Type" => "application/json"))
       http_request.body = body if body
 
-      response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == "https") do |http|
-        http.request(http_request)
-      end
+      options = {
+        use_ssl: uri.scheme == "https",
+        open_timeout: OPEN_TIMEOUT,
+        read_timeout: READ_TIMEOUT
+      }
+      response = Net::HTTP.start(uri.hostname, uri.port, **options) { |http| http.request(http_request) }
 
       raise UnauthorizedError if response.code.to_i == 401
       raise RateLimitError if response.code.to_i == 429

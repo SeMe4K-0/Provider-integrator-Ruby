@@ -39,6 +39,16 @@
 <% error_map.each do |code, rule| -%>
 | <%= code %> | <%= rule[:code] %> | <%= rule[:action] %> |
 <% end -%>
+<% unless mapping.provider_error_codes.empty? -%>
+
+Провайдер дополнительно возвращает собственный код в теле ошибки. Один и тот же
+HTTP-статус может означать разные причины, поэтому код стоит логировать и разбирать
+отдельно:
+
+<% mapping.provider_error_codes.each do |code| -%>
+- `<%= code %>`
+<% end -%>
+<% end -%>
 
 ## Тело запроса на создание операции
 

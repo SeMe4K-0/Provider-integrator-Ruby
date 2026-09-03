@@ -77,6 +77,42 @@ RSpec.describe Provider::NovapayService do
 
       expect(@server.requests.last.headers).to include("x-api-key" => "test_api_key")
     end
+
+    it "передаёт ключ идемпотентности" do
+      service.create_request(operation)
+
+      expect(@server.requests.last.headers["idempotency-key"]).to eq(operation.id.to_s)
+    end
+  end
+
+  describe "предпроверки" do
+    it "отклоняет операцию на сумму ниже минимальной" do
+      operation.amount = fixtures.dig("edge_cases", "amount_below_minimum", "amount")
+
+      result = service.check_conditions(operation)
+
+      expect(result).to be_failed
+      expect(result.message).to eq("amount_too_low")
+    end
+
+    it "пропускает операцию на допустимую сумму" do
+      expect(service.check_conditions(operation)).to be_success
+    end
+  end
+
+  describe "ошибки провайдера" do
+    it "возвращает внутренний код ошибки на ответ 400" do
+      @server.stop
+      @server = MockProviderServer.new(
+        [{ method: "POST", path: %r{/payouts\z}, status: 400, body: { "error" => { "code" => "failed" } } }]
+      ).start
+      ENV["NOVAPAY_BASE_URL"] = @server.base_url
+
+      result = service.create_request(operation)
+
+      expect(result).to be_failed
+      expect(result.message).to eq("provider.validation_error")
+    end
   end
 
   describe "запрос статуса" do

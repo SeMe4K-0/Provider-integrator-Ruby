@@ -19,11 +19,16 @@ required:
     - currency
     - curr
 
+  # merchant_id намеренно не в списке: у большинства провайдеров это
+  # идентификатор мерчанта, а не операции, и запись туда operation.id
+  # сломала бы сверку. Добавляйте его точечно, если провайдер трактует
+  # поле иначе — как CardPay в specs_examples.
   external_id:
     - external_id
-    - merchant_id
     - reference
     - client_operation_id
+    - order_id
+    - merchant_order_id
 
 optional:
   recipient_type:

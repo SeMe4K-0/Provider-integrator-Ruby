@@ -59,6 +59,27 @@ RSpec.describe ProviderIntegrator::DataMapper do
     end
   end
 
+  describe "поля провайдера, которых нет в словаре" do
+    subject(:result) { described_class.map(novapay_spec, novapay_analysis) }
+
+    it "сообщает о неизвестном обязательном поле, а не теряет его молча" do
+      spec = ProviderIntegrator::SpecLoader.load(File.expand_path("fixtures/unknown_field_provider.yaml", __dir__))
+      analysis = ProviderIntegrator::SemanticAnalyzer.analyze(spec)
+      report = described_class.map(spec, analysis).report
+
+      entry = report.unresolved.find { |e| e.key == "merchant_id" }
+      expect(entry).not_to be_nil
+      expect(entry.detail).to include("не описано в config/rules/field_aliases.yml")
+    end
+
+    it "не принимает merchant_id за идентификатор операции" do
+      spec = ProviderIntegrator::SpecLoader.load(File.expand_path("fixtures/unknown_field_provider.yaml", __dir__))
+      analysis = ProviderIntegrator::SemanticAnalyzer.analyze(spec)
+
+      expect(described_class.map(spec, analysis).fields).not_to have_key("external_id")
+    end
+  end
+
   describe "провайдер с незнакомым статусом" do
     it "не додумывает соответствие, а помечает статус как unresolved" do
       schemas = {

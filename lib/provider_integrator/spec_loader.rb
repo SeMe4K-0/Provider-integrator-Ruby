@@ -5,6 +5,7 @@ require "yaml"
 
 require_relative "errors"
 require_relative "ref_resolver"
+require_relative "schema_normalizer"
 require_relative "ir/parameter"
 require_relative "ir/security_scheme"
 require_relative "ir/endpoint"
@@ -23,6 +24,8 @@ module ProviderIntegrator
 
     def initialize(path)
       @path = path
+      @notes = []
+      @media_types = []
     end
 
     def load
@@ -31,7 +34,8 @@ module ProviderIntegrator
       check_required_sections!(raw)
 
       resolved = RefResolver.new(raw).resolve(raw)
-      build_spec_model(resolved)
+      normalized, @notes = SchemaNormalizer.normalize(resolved)
+      build_spec_model(normalized)
     end
 
     private
@@ -68,18 +72,23 @@ module ProviderIntegrator
       raise SpecLoadError, "Поддерживается только OpenAPI 3.x, обнаружена версия #{version}"
     end
 
+    # В OpenAPI 3.1 paths необязателен: документ, описывающий только входящие
+    # уведомления, состоит из одного раздела webhooks и полностью валиден
     def check_required_sections!(raw)
       unless raw["info"].is_a?(Hash)
         raise SpecLoadError, 'В спецификации отсутствует обязательный раздел "info"'
       end
-
       return if raw["paths"].is_a?(Hash) && !raw["paths"].empty?
+      return if raw["webhooks"].is_a?(Hash) && !raw["webhooks"].empty?
 
-      raise SpecLoadError, 'В спецификации отсутствует обязательный раздел "paths" с эндпоинтами'
+      raise SpecLoadError,
+            'В спецификации нет ни одного эндпоинта: отсутствуют разделы "paths" и "webhooks"'
     end
 
     def build_spec_model(raw)
       components = raw.fetch("components", {})
+
+      endpoints = build_endpoints(raw["paths"], raw["security"])
 
       IR::SpecModel.new(
         title: raw.dig("info", "title"),
@@ -87,10 +96,20 @@ module ProviderIntegrator
         servers: build_servers(raw["servers"]),
         security_schemes: build_security_schemes(components["securitySchemes"]),
         global_security: security_names(raw["security"]),
-        endpoints: build_endpoints(raw["paths"], raw["security"]),
+        endpoints: endpoints,
         schemas: components.fetch("schemas", {}),
-        raw_webhooks: raw.fetch("webhooks", {})
+        raw_webhooks: raw.fetch("webhooks", {}),
+        notes: @notes + media_type_notes
       )
+    end
+
+    # Использование не-JSON содержимого — не ошибка, но о нём нужно знать:
+    # сгенерированный клиент отправляет тело как JSON
+    def media_type_notes
+      other = @media_types.uniq.reject { |type| type == "application/json" }
+      return [] if other.empty?
+
+      ["тело запроса описано типом #{other.join(', ')} — сгенерированный сервис отправляет JSON, проверьте совместимость"]
     end
 
     def build_servers(servers)
@@ -161,15 +180,43 @@ module ProviderIntegrator
       end
     end
 
+    # Тип содержимого выбирается по приоритету, а не жёстко: сначала JSON,
+    # затем любой вендорный +json, затем форма, и лишь потом первый доступный.
+    # Выбор запоминается — он попадает в отчёт и в документацию.
+    CONTENT_PRIORITY = [
+      ->(type) { type == "application/json" },
+      ->(type) { type.end_with?("+json") },
+      ->(type) { type == "application/x-www-form-urlencoded" }
+    ].freeze
+
+    def select_media_type(content)
+      return nil unless content.is_a?(Hash) && !content.empty?
+
+      types = content.keys
+      CONTENT_PRIORITY.each do |matcher|
+        found = types.find { |type| matcher.call(type.to_s.downcase) }
+        return found if found
+      end
+      types.first
+    end
+
     def request_body_schema(request_body)
       return nil unless request_body.is_a?(Hash)
 
-      request_body.dig("content", "application/json", "schema")
+      content = request_body["content"]
+      media_type = select_media_type(content)
+      return nil if media_type.nil?
+
+      @media_types << media_type
+      content.dig(media_type, "schema")
     end
 
     def build_responses(responses)
       Hash(responses).each_with_object({}) do |(status, response), acc|
-        acc[status] = response.is_a?(Hash) ? response.dig("content", "application/json", "schema") : nil
+        next acc[status] = nil unless response.is_a?(Hash)
+
+        media_type = select_media_type(response["content"])
+        acc[status] = media_type ? response.dig("content", media_type, "schema") : nil
       end
     end
 

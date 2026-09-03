@@ -81,6 +81,49 @@ RSpec.describe Provider::<%= class_name %> do
 
       expect(@server.requests.last.headers).to include(<%= auth_header_assertion %>)
     end
+<% if idempotency_header_name -%>
+
+    it "передаёт ключ идемпотентности" do
+      service.create_request(operation)
+
+      expect(@server.requests.last.headers["<%= idempotency_header_name.downcase %>"]).to eq(operation.id.to_s)
+    end
+<% end -%>
+  end
+
+<% end -%>
+<% if min_amount -%>
+  describe "предпроверки" do
+    it "отклоняет операцию на сумму ниже минимальной" do
+      operation.amount = fixtures.dig("edge_cases", "amount_below_minimum", "amount")
+
+      result = service.check_conditions(operation)
+
+      expect(result).to be_failed
+      expect(result.message).to eq("amount_too_low")
+    end
+
+    it "пропускает операцию на допустимую сумму" do
+      expect(service.check_conditions(operation)).to be_success
+    end
+  end
+
+<% end -%>
+<% if create_success_fixture && testable_error -%>
+<% error_code, error_rule = testable_error -%>
+  describe "ошибки провайдера" do
+    it "возвращает внутренний код ошибки на ответ <%= error_code %>" do
+      @server.stop
+      @server = MockProviderServer.new(
+        [{ method: "POST", path: %r{<%= create_path_pattern %>}, status: <%= error_code %>, body: { "error" => { "code" => "failed" } } }]
+      ).start
+      ENV["<%= env_var_name %>"] = @server.base_url
+
+      result = service.create_request(operation)
+
+      expect(result).to be_failed
+      expect(result.message).to eq("provider.<%= error_rule[:code] %>")
+    end
   end
 
 <% end -%>

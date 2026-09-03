@@ -30,7 +30,7 @@ class Provider
       401 => { code: "invalid_credentials", action: "alert_and_block" },
       402 => { code: "insufficient_balance", action: "retry" },
       404 => { code: "not_found", action: "reject" },
-      409 => { code: "conflict", action: "reject" },
+      409 => { code: "duplicate_request", action: "fetch_status" },
       422 => { code: "validation_error", action: "reject" },
       429 => { code: "rate_limit", action: "retry_backoff" },
       500 => { code: "internal_error", action: "alert_and_retry" },
@@ -61,7 +61,7 @@ class Provider
     end
 
     def create_request(operation, request_method = "create")
-      response = client.post("#{base_url}/payouts", json: build_payload(operation), headers: auth_headers)
+      response = client.post(url_for("/payouts"), json: build_payload(operation), headers: create_headers(operation))
       parse_create_response(operation, response)
     rescue Provider::RateLimitError
       failure(:too_many_requests, "provider.rate_limit")
@@ -70,7 +70,7 @@ class Provider
     end
 
     def fetch_status(operation)
-      response = client.get("#{base_url}/payouts/#{operation.provider_operation_id}", headers: auth_headers)
+      response = client.get(url_for("/payouts/#{operation.provider_operation_id}"), headers: auth_headers)
       return failure(*error_for(response.code)) unless response.success?
       return failure(:unprocessable_entity, "provider.malformed_response") unless response.body.is_a?(Hash)
 
@@ -82,7 +82,7 @@ class Provider
     end
 
     def cancel_request(operation)
-      response = client.post("#{base_url}/payouts/#{operation.provider_operation_id}/cancel", json: {}, headers: auth_headers)
+      response = client.post(url_for("/payouts/#{operation.provider_operation_id}/cancel"), json: {}, headers: auth_headers)
       return failure(*error_for(response.code)) unless response.success?
       return failure(:unprocessable_entity, "provider.malformed_response") unless response.body.is_a?(Hash)
 
@@ -118,12 +118,25 @@ class Provider
       ENV.fetch("NOVAPAY_BASE_URL", BASE_URL)
     end
 
+    # Адрес запроса
+    def url_for(path)
+      "#{base_url}#{path}"
+    end
+
     # Заголовки авторизации: ApiKeyAuth (apiKey, заголовок X-API-Key)
     def auth_headers
       { "X-API-Key" => credentials.fetch(:api_key) }
     end
 
+    # Заголовки запроса на создание операции
+    # Ключ идемпотентности берётся из идентификатора операции: повторная отправка
+    # того же запроса не создаст у провайдера вторую выплату
+    def create_headers(operation)
+      auth_headers.merge("Idempotency-Key" => operation.id.to_s)
+    end
+
     # TODO: поле recipient.type: выбрано "sbp" из вариантов sbp, card — проверьте, что это соответствует шлюзу
+    # TODO: поле recipient.card_number относится к способу выплаты "card", а выбран "sbp" — в запрос не включено
     # Незаполненные реквизиты отбрасываются: провайдеру не отправляются поля со значением nil
     def build_payload(operation)
       {
@@ -134,13 +147,15 @@ class Provider
           type: "sbp",
           phone: operation.payout_requisite.dig("sbp", "phone"),
           bank_code: operation.payout_requisite.dig("sbp", "bank_code"),
-          bank_name: operation.payout_requisite.dig("sbp", "bank_name"),
-          card_number: operation.payout_requisite.dig("card", "number")
+          bank_name: operation.payout_requisite.dig("sbp", "bank_name")
         }.compact
       }.compact
     end
 
     def parse_create_response(operation, response)
+      # Повтор с тем же ключом идемпотентности возвращает уже созданную
+      # операцию, а не ошибку: её нужно принять, а не отклонить
+      return parse_duplicate(operation, response) if error_action(response.code) == "fetch_status"
       return failure(*error_for(response.code)) unless response.success?
       return failure(:unprocessable_entity, "provider.malformed_response") unless response.body.is_a?(Hash)
 
@@ -186,6 +201,13 @@ class Provider
 
     def error_action(http_code)
       ERROR_MAP.dig(http_code, :action) || "alert_and_retry"
+    end
+
+    def parse_duplicate(operation, response)
+      return failure(:conflict, "provider.duplicate_request") unless response.body.is_a?(Hash)
+
+      operation.provider_operation_id = response.body["id"]
+      map_status(response.body["status"])
     end
 
     # Подпись тела запроса: HMAC-SHA256, кодировка hex

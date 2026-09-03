@@ -12,14 +12,22 @@ module ProviderIntegrator
       return Array(schema["enum"]).first if schema["enum"].is_a?(Array)
       return nil if depth > MAX_DEPTH
 
-      case schema["type"]
+      # Тип может быть не указан: по наличию properties или items видно,
+      # что это объект или массив, иначе значение считается строкой
+      case schema["type"] || implied_type(schema)
       when "object" then sample_object(schema, depth)
       when "array" then [sample(schema["items"], depth + 1)].compact
-      when "integer" then schema["minimum"] || 0
-      when "number" then schema["minimum"] || 0
+      when "integer", "number" then sample_number(schema)
       when "boolean" then true
       else sample_string(schema)
       end
+    end
+
+    def self.implied_type(schema)
+      return "object" if schema["properties"].is_a?(Hash)
+      return "array" if schema.key?("items")
+
+      nil
     end
 
     def self.sample_object(schema, depth)
@@ -28,14 +36,28 @@ module ProviderIntegrator
       end
     end
 
-    # Для строк с pattern возвращается сам шаблон: подставить осмысленное значение
-    # без генерации по регулярному выражению нельзя, а выдумывать его не нужно
-    def self.sample_string(schema)
-      return schema["pattern"] if schema["pattern"]
+    # Ноль в примере платежа выглядит как ошибка, поэтому при отсутствии
+    # минимума берётся правдоподобная величина, а не пустое значение
+    def self.sample_number(schema)
+      minimum = schema["minimum"]
+      return minimum if minimum.is_a?(Numeric) && minimum.positive?
 
-      schema["format"] == "date-time" ? "2026-01-01T00:00:00Z" : "string"
+      1000
     end
 
-    private_class_method :sample_object, :sample_string
+    # Регулярное выражение из pattern — это описание формата, а не значение:
+    # подставлять его в фикстуру нельзя. Для известных форматов берётся
+    # правдоподобный образец, иначе — нейтральная строка.
+    def self.sample_string(schema)
+      case schema["format"]
+      when "date-time" then "2026-01-01T00:00:00Z"
+      when "date" then "2026-01-01"
+      when "uuid" then "00000000-0000-4000-8000-000000000000"
+      when "email" then "user@example.com"
+      else schema["pattern"] ? "string_matching_pattern" : "string"
+      end
+    end
+
+    private_class_method :implied_type, :sample_object, :sample_number, :sample_string
   end
 end
