@@ -1,0 +1,72 @@
+# Провайдер, не описавший авторизацию в спецификации: раздела securitySchemes нет
+# вовсе. Все эндпоинты формально публичны, поэтому признак «публичный POST с телом»
+# здесь бессмыслен — создание выплаты не должно приниматься за входящее уведомление.
+openapi: 3.0.3
+info:
+  title: No-security Provider
+  version: "1.0"
+servers:
+  - url: https://api.nosecurity.example/v1
+paths:
+  /payouts:
+    post:
+      summary: Создать выплату
+      operationId: createPayout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount:
+                  type: integer
+                  description: Сумма в копейках
+                currency:
+                  type: string
+                  enum: [RUB]
+                external_id:
+                  type: string
+                recipient:
+                  type: object
+                  properties:
+                    phone:
+                      type: string
+      responses:
+        '201':
+          description: Выплата создана
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayoutResponse'
+        '400':
+          description: Ошибка валидации
+  /payouts/{payout_id}:
+    get:
+      summary: Статус выплаты
+      operationId: getPayout
+      parameters:
+        - name: payout_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Статус
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayoutResponse'
+
+components:
+  schemas:
+    PayoutResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [pending, completed, failed]

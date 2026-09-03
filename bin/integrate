@@ -64,7 +64,11 @@ else
 end
 
 if analysis.webhook_found
-  source = { path: "путь в paths", webhooks_section: "раздел webhooks:" }[analysis.webhook_source]
+  source = {
+    path: "путь в paths",
+    webhooks_section: "раздел webhooks:",
+    heuristic: "косвенный признак, требует проверки"
+  }[analysis.webhook_source]
   signature = result.mapping.signature
   suffix = signature ? ", подпись #{signature.header_name} (HMAC-#{signature.algorithm}/#{signature.encoding})" : ""
   puts "Webhook: найден (#{source})#{suffix}"

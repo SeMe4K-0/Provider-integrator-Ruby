@@ -1,0 +1,69 @@
+# Провайдер, у которого приёмник уведомлений называется нехарактерно (/events),
+# но авторизация объявлена и требуется остальными эндпоинтами. Здесь security: []
+# — осознанное исключение, поэтому косвенный признак работает.
+openapi: 3.0.3
+info:
+  title: Implicit-webhook Provider
+  version: "1.0"
+servers:
+  - url: https://api.implicit.example/v1
+paths:
+  /payouts:
+    post:
+      summary: Создать выплату
+      operationId: createPayout
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount:
+                  type: integer
+                  description: Сумма в копейках
+      responses:
+        '201':
+          description: Создана
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayoutResponse'
+  /events:
+    post:
+      summary: Уведомление о смене статуса
+      operationId: receiveEvent
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                status:
+                  type: string
+      responses:
+        '200':
+          description: Принято
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  schemas:
+    PayoutResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [pending, completed, failed]

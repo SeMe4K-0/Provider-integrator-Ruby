@@ -37,6 +37,7 @@ module ProviderIntegrator
       error_map = map_errors
       fields = map_fields
       amount = map_amount(fields)
+      report_webhook_confidence
 
       MappingResult.new(
         report: @report,
@@ -58,6 +59,17 @@ module ProviderIntegrator
 
     def load_rules(file_name)
       YAML.load_file(File.join(@rules_dir, file_name))
+    end
+
+    # Вебхук, опознанный только по косвенному признаку, — не факт, а догадка:
+    # она выносится в отчёт, чтобы её проверил человек
+    def report_webhook_confidence
+      return unless @analysis.webhook_source == :heuristic
+
+      endpoints = @analysis.by_role(:webhook).map(&:to_s).join(", ")
+      @report.add_unresolved(:webhook, "(определение роли)",
+                              "#{endpoints} опознан как входящее уведомление только по косвенному признаку " \
+                              "(публичный POST с телом) — убедитесь, что это не создание операции")
     end
 
     def map_statuses

@@ -57,6 +57,38 @@ RSpec.describe ProviderIntegrator::SemanticAnalyzer do
     end
   end
 
+  describe "провайдер, не описавший авторизацию" do
+    subject(:analysis) do
+      spec = ProviderIntegrator::SpecLoader.load(File.join(fixtures, "no_security_provider.yaml"))
+      described_class.analyze(spec)
+    end
+
+    it "не принимает создание операции за входящее уведомление" do
+      endpoint = analysis.endpoints.find { |e| e.path == "/payouts" && e.http_method == "post" }
+      expect(endpoint.role).to eq(:create)
+    end
+
+    it "не находит webhook там, где его нет" do
+      expect(analysis.webhook_found).to be false
+    end
+  end
+
+  describe "webhook без характерного имени пути" do
+    subject(:analysis) do
+      spec = ProviderIntegrator::SpecLoader.load(File.join(fixtures, "implicit_webhook_provider.yaml"))
+      described_class.analyze(spec)
+    end
+
+    it "опознаёт публичный POST с телом как уведомление, когда авторизация где-то требуется" do
+      endpoint = analysis.endpoints.find { |e| e.path == "/events" }
+      expect(endpoint.role).to eq(:webhook)
+    end
+
+    it "помечает такое определение как косвенное" do
+      expect(analysis.webhook_source).to eq(:heuristic)
+    end
+  end
+
   describe "провайдер без webhook (ни path, ни webhooks:)" do
     subject(:analysis) do
       spec = ProviderIntegrator::SpecLoader.load(File.join(fixtures, "no_webhook_provider.yaml"))
