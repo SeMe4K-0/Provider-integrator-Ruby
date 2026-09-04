@@ -31,8 +31,14 @@ module ProviderIntegrator
 
     def run
       result = analyze_only
-      result.written_files = write_files(result.context)
+      result.written_files = write(result.context)
       result
+    end
+
+    # Запись отделена от разбора, чтобы вызывающая сторона могла показать
+    # ход работы между этими шагами, а не после всего сразу
+    def write(context)
+      write_files(context)
     end
 
     # Разбор и сопоставление без записи файлов — режим --dry-run

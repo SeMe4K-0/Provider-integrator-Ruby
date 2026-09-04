@@ -62,7 +62,7 @@ begin
     provider: provider,
     output_dir: options[:output]
   )
-  result = options[:dry_run] ? pipeline.analyze_only : pipeline.run
+  result = pipeline.analyze_only
 rescue ProviderIntegrator::SpecLoadError => e
   warn "Ошибка разбора спецификации: #{e.message}"
   exit 1
@@ -123,7 +123,20 @@ end
 puts "\nИтого: #{report.resolved.size} распознано, #{report.unresolved.size} требует решения, " \
      "#{report.skipped.size} неприменимо к этому провайдеру"
 
-if result.written_files
+# Генерация идёт после отчёта: сначала видно, что распознано, потом что записано
+unless options[:dry_run]
+  puts
+  puts "Generating service..."
+  puts "Generating integration guide..."
+  puts "Generating test fixtures..."
+
+  begin
+    written = pipeline.write(result.context)
+  rescue ProviderIntegrator::GenerationError => e
+    warn "Ошибка генерации: #{e.message}"
+    exit 1
+  end
+
   puts "\nOutput:"
-  result.written_files.each { |path| puts "  #{path}" }
+  written.each { |path| puts "  #{path}" }
 end

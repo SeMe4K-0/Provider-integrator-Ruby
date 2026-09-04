@@ -37,7 +37,7 @@
 git clone https://github.com/SeMe4K-0/Provider-integrator-Ruby.git
 cd Provider-integrator-Ruby
 bundle install
-ruby bin/integrate --spec specs_examples/provider_api.yaml --provider novapay --lang ruby
+./integrate --spec specs_examples/provider_api.yaml --provider novapay --lang ruby
 ```
 
 Результат появится в `./output/novapay/` — каталог по умолчанию свой для каждого провайдера, чтобы файлы разных интеграций не смешивались.
@@ -45,7 +45,7 @@ ruby bin/integrate --spec specs_examples/provider_api.yaml --provider novapay --
 ## Использование
 
 ```bash
-ruby bin/integrate --spec PATH [--provider NAME] [--lang ruby] [--output DIR] [--dry-run]
+./integrate --spec PATH [--provider NAME] [--lang ruby] [--output DIR] [--dry-run]
 ```
 
 | Флаг | Назначение |
@@ -55,6 +55,7 @@ ruby bin/integrate --spec PATH [--provider NAME] [--lang ruby] [--output DIR] [-
 | `--lang` | целевой язык, сейчас поддерживается `ruby` |
 | `--output` | каталог результата, по умолчанию `./output/<provider>` |
 | `--dry-run` | только разбор и отчёт, без создания файлов |
+| `--debug` | печатать трейс при непредвиденной ошибке |
 
 Вывод на эталонной спецификации:
 
@@ -79,6 +80,18 @@ Webhook: найден (путь в paths), подпись X-NovaPay-Signature (H
   ...
 
 Итого: 28 распознано, 0 требует решения, 1 неприменимо к этому провайдеру
+
+Generating service...
+Generating integration guide...
+Generating test fixtures...
+
+Output:
+  output/novapay/novapay_service.rb
+  output/novapay/INTEGRATION.md
+  output/novapay/fixtures.json
+  output/novapay/novapay_integration_self_test_spec.rb
+  output/novapay/provider_base_service.rb
+  output/novapay/mock_provider_server.rb
 ```
 
 Три состояния в отчёте различаются по смыслу: ✅ распознано, ⚠️ требует решения человека, · неприменимо к этому провайдеру (например, телефон СБП у карточного провайдера).

@@ -1,0 +1,7 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Точка входа из корня репозитория: в условии задачи команда запускается
+# как ./integrate, и этот файл повторяет пример из условия дословно.
+# Вся логика остаётся в bin/integrate — здесь только переадресация.
+load File.expand_path("bin/integrate", __dir__)
