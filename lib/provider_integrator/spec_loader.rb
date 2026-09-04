@@ -4,6 +4,7 @@ require "date"
 require "yaml"
 
 require_relative "errors"
+require_relative "content"
 require_relative "ref_resolver"
 require_relative "schema_normalizer"
 require_relative "ir/parameter"
@@ -49,6 +50,7 @@ module ProviderIntegrator
       raise SpecLoadError, "Файл не найден: #{@path}" unless File.exist?(@path)
       raise SpecLoadError, "Ожидается файл спецификации, а указан каталог: #{@path}" unless File.file?(@path)
 
+      check_alias_bomb!
       YAML.safe_load_file(@path, permitted_classes: [Date, Time], aliases: true)
     rescue Psych::SyntaxError => e
       raise SpecLoadError, "Некорректный YAML в файле #{@path}: #{e.message}"
@@ -56,6 +58,31 @@ module ProviderIntegrator
       raise SpecLoadError, "Не удалось разобрать YAML в файле #{@path}: #{e.message}"
     rescue SystemCallError => e
       raise SpecLoadError, "Не удалось прочитать файл #{@path}: #{e.message}"
+    end
+
+    # YAML-якоря позволяют собрать «алиасную бомбу»: файл в несколько сотен байт
+    # разворачивается в миллиарды узлов и вешает процесс ещё на стадии загрузки.
+    # Спецификации платёжных провайдеров якорями почти не пользуются, поэтому
+    # достаточно ограничить их число и размер файла.
+    MAX_FILE_SIZE = 5 * 1024 * 1024
+    MAX_ALIASES = 100
+
+    def check_alias_bomb!
+      size = File.size(@path)
+      if size > MAX_FILE_SIZE
+        raise SpecLoadError,
+              "Файл слишком велик (#{size / 1024} КБ, допустимо #{MAX_FILE_SIZE / 1024} КБ)"
+      end
+
+      text = File.read(@path, encoding: "UTF-8")
+      anchors = text.scan(/(?<![\w*])&[\w-]+/).size
+      aliases = text.scan(/(?<![\w*])\*[\w-]+/).size
+      return if aliases <= MAX_ALIASES && anchors <= MAX_ALIASES
+
+      raise SpecLoadError,
+            "В файле #{aliases} YAML-ссылок и #{anchors} якорей — больше допустимого " +
+            "(#{MAX_ALIASES}). Такая структура разворачивается лавинообразно, " +
+            "разверните ссылки в исходном файле."
     end
 
     def check_openapi_version!(raw)
@@ -101,6 +128,7 @@ module ProviderIntegrator
         endpoints: endpoints,
         schemas: components.fetch("schemas", {}),
         raw_webhooks: raw.fetch("webhooks", {}),
+        raw_callbacks: collect_callbacks(raw["paths"]),
         notes: @notes + media_type_notes
       )
     end
@@ -114,8 +142,30 @@ module ProviderIntegrator
       ["тело запроса описано типом #{other.join(', ')} — сгенерированный сервис отправляет JSON, проверьте совместимость"]
     end
 
+    # Шаблон адреса с переменными (https://{environment}.acme.example/{basePath})
+    # раскрывается по default из спецификации: иначе фигурные скобки уезжают
+    # прямо в BASE_URL сгенерированного сервиса и он падает в рантайме
     def build_servers(servers)
-      Array(servers).map { |s| { url: s["url"], description: s["description"] } }
+      Array(servers).map do |server|
+        { url: expand_server_url(server), description: server["description"] }
+      end
+    end
+
+    def expand_server_url(server)
+      url = server["url"].to_s
+      variables = server["variables"]
+      return url unless variables.is_a?(Hash)
+
+      url.gsub(/\{([^}]+)\}/) do
+        name = Regexp.last_match(1)
+        value = variables.dig(name, "default")
+        if value.nil?
+          @notes << "у переменной \"#{name}\" в адресе сервера нет default — подставьте значение вручную"
+          Regexp.last_match(0)
+        else
+          value.to_s
+        end
+      end
     end
 
     def build_security_schemes(schemes)
@@ -165,6 +215,22 @@ module ProviderIntegrator
       )
     end
 
+    # В OpenAPI 3.0 входящее уведомление описывают разделом callbacks внутри
+    # операции — это штатный способ, не менее частый, чем webhooks: из 3.1.
+    # Собранные сюда операции превращаются в вебхук-эндпоинты в SemanticAnalyzer.
+    def collect_callbacks(paths)
+      Hash(paths).each_with_object({}) do |(_path, path_item), acc|
+        next unless path_item.is_a?(Hash)
+
+        HTTP_METHODS.each do |method|
+          callbacks = path_item.dig(method, "callbacks")
+          next unless callbacks.is_a?(Hash)
+
+          callbacks.each { |name, definition| acc[name] = definition if definition.is_a?(Hash) }
+        end
+      end
+    end
+
     # Вызывается и снаружи: SemanticAnalyzer разбирает этим же кодом параметры
     # операций из раздела webhooks: (OpenAPI 3.1)
     def self.build_parameters(params)
@@ -182,44 +248,20 @@ module ProviderIntegrator
       end
     end
 
-    # Тип содержимого выбирается по приоритету, а не жёстко: сначала JSON,
-    # затем любой вендорный +json, затем форма, и лишь потом первый доступный.
-    # Выбор запоминается — он попадает в отчёт и в документацию.
-    CONTENT_PRIORITY = [
-      ->(type) { type == "application/json" },
-      ->(type) { type.end_with?("+json") },
-      ->(type) { type == "application/x-www-form-urlencoded" }
-    ].freeze
-
-    def select_media_type(content)
-      return nil unless content.is_a?(Hash) && !content.empty?
-
-      types = content.keys
-      CONTENT_PRIORITY.each do |matcher|
-        found = types.find { |type| matcher.call(type.to_s.downcase) }
-        return found if found
-      end
-      types.first
-    end
-
     def request_body_schema(request_body)
       return nil unless request_body.is_a?(Hash)
 
-      content = request_body["content"]
-      media_type = select_media_type(content)
-      return nil if media_type.nil?
-
-      @media_types << media_type
-      content.dig(media_type, "schema")
+      media_type = Content.select_media_type(request_body["content"])
+      @media_types << media_type if media_type
+      Content.schema(request_body)
     end
 
     def build_responses(responses)
-      Hash(responses).each_with_object({}) do |(status, response), acc|
-        next acc[status] = nil unless response.is_a?(Hash)
+      Content.responses(responses)
+    end
 
-        media_type = select_media_type(response["content"])
-        acc[status] = media_type ? response.dig("content", media_type, "schema") : nil
-      end
+    def build_request_examples(request_body)
+      request_body.is_a?(Hash) ? Content.examples(request_body) : {}
     end
 
     # По спецификации параметр операции перекрывает объявленный на уровне пути,
@@ -229,34 +271,8 @@ module ProviderIntegrator
       path_level.reject { |p| overridden.include?([p.name, p.location]) } + operation_level
     end
 
-    # Примеры тела запроса: одиночный example сохраняется под ключом "default",
-    # именованные examples — под своими именами (нужны для генерации фикстур)
-    def build_request_examples(request_body)
-      return {} unless request_body.is_a?(Hash)
-
-      media = request_body.dig("content", "application/json")
-      named_examples(media)
-    end
-
-    # Примеры ответов по HTTP-кодам
     def build_response_examples(responses)
-      Hash(responses).each_with_object({}) do |(status, response), acc|
-        next unless response.is_a?(Hash)
-
-        examples = named_examples(response.dig("content", "application/json"))
-        acc[status] = examples unless examples.empty?
-      end
-    end
-
-    def named_examples(media)
-      return {} unless media.is_a?(Hash)
-
-      result = {}
-      result["default"] = media["example"] if media.key?("example")
-      Hash(media["examples"]).each do |name, entry|
-        result[name] = entry["value"] if entry.is_a?(Hash) && entry.key?("value")
-      end
-      result
+      Content.response_examples(responses)
     end
 
     # Массив SecurityRequirement (например [{"ApiKeyAuth" => []}]) превращается

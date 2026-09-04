@@ -170,11 +170,25 @@ module ProviderIntegrator
 
       Hash(schema["properties"]).each do |name, prop_schema|
         next unless candidates.include?(name.downcase) && prop_schema.is_a?(Hash)
-        next unless prop_schema["enum"].is_a?(Array)
 
-        return { name: name, enum: prop_schema["enum"] }
+        values = prop_schema["enum"].is_a?(Array) ? prop_schema["enum"] : enum_from_description(prop_schema)
+        next if values.nil? || values.empty?
+
+        return { name: name, enum: values }
       end
       nil
+    end
+
+    # Перечень статусов нередко описывают текстом, а не enum: "pending|completed|failed"
+    # или "one of: pending, completed". Такой список тоже стоит распознать,
+    # иначе провайдер остаётся вообще без маппинга статусов.
+    def enum_from_description(prop_schema)
+      description = prop_schema["description"].to_s
+      return nil unless description.match?(/\A[\s\w|,:.\-]+\z/)
+
+      candidates = description.split(%r{[|,]}).map { |part| part.strip.split(/\s+/).last.to_s.downcase }
+      values = candidates.select { |value| value.match?(/\A[a-z][a-z0-9_]{2,}\z/) }.uniq
+      values.size >= 2 ? values : nil
     end
 
     # Коды ошибок самого провайдера (enum в схеме ошибки) — отдельная от HTTP
@@ -212,9 +226,11 @@ module ProviderIntegrator
 
     # Уникальные HTTP-коды ошибок (4xx/5xx), встречающиеся в ответах эндпоинтов
     def http_codes
+      # Ключи ответов в YAML часто пишут без кавычек, и Psych отдаёт их числами:
+      # приведение к строке обязательно, иначе match? падает на Integer
       @spec_model.endpoints
                  .flat_map { |e| e.responses.keys }
-                 .select { |status| status.match?(/\A[45]\d\d\z/) }
+                 .select { |status| status.to_s.match?(/\A[45]\d\d\z/) }
                  .map(&:to_i)
                  .uniq
                  .sort
@@ -262,7 +278,7 @@ module ProviderIntegrator
     def match_group(rules, properties, fields, required:)
       rules.each do |canonical, aliases|
         names = Array(aliases).map(&:downcase)
-        match = properties.find { |prop| names.include?(prop[:name].downcase) }
+        match = best_match(properties, canonical, names)
 
         if match
           @report.add_resolved(:field, canonical, "поле #{match[:path].join('.')}")
@@ -272,6 +288,24 @@ module ProviderIntegrator
         else
           @report.add_skipped(:field, canonical, "не используется этим провайдером")
         end
+      end
+    end
+
+    # Из нескольких полей с подходящим именем выбирается не первое попавшееся,
+    # а самое правдоподобное: поле верхнего уровня важнее вложенного, точное
+    # совпадение с каноническим именем важнее синонима. Иначе блок fee { amount }
+    # объявленный раньше amount, забирал бы сумму выплаты себе — тихая порча
+    # денежных данных, худший класс ошибки для платёжной интеграции.
+    def best_match(properties, canonical, names)
+      candidates = properties.select { |prop| names.include?(prop[:name].downcase) && !prop[:object] }
+      return nil if candidates.empty?
+
+      candidates.min_by do |prop|
+        [
+          prop[:path].size,
+          prop[:name].downcase == canonical.to_s.downcase ? 0 : 1,
+          names.index(prop[:name].downcase) || names.size
+        ]
       end
     end
 

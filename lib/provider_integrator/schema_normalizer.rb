@@ -25,11 +25,16 @@ module ProviderIntegrator
 
     def initialize
       @notes = []
+      # Резолвер отдаёт один и тот же объект на каждое упоминание общей схемы.
+      # Без запоминания по тождеству нормализатор обходил бы такое поддерево
+      # заново на каждом упоминании — на документе с переиспользуемыми
+      # компонентами это давало экспоненциальный рост времени.
+      @seen = {}
     end
 
     def walk(node, path = [])
       case node
-      when Hash then walk_hash(node, path)
+      when Hash then @seen[node.object_id] ||= walk_hash(node, path)
       when Array then node.each_with_index.map { |item, index| walk(item, path + [index.to_s]) }
       else node
       end
@@ -90,7 +95,7 @@ module ProviderIntegrator
       variants = Array(schema[keyword]).select { |variant| variant.is_a?(Hash) }
       return schema.reject { |key, _| key == keyword } if variants.empty?
 
-      chosen = variants.first
+      chosen = choose_variant(variants, schema["discriminator"])
       rest = schema.reject { |key, _| [keyword, "discriminator"].include?(key) }
       note_variants(path, keyword, variants, schema["discriminator"])
 
@@ -98,6 +103,20 @@ module ProviderIntegrator
       absorb(merged, chosen, path)
       absorb(merged, rest, path)
       merged["required"].empty? ? merged.reject { |key, _| key == "required" } : merged
+    end
+
+    # Дискриминатор называет поле, по которому провайдер различает варианты.
+    # Канонически каждый вариант объявляет это поле enum из одного значения —
+    # такой вариант и берётся. Если разметки нет, остаётся первый.
+    def choose_variant(variants, discriminator)
+      property = discriminator.is_a?(Hash) ? discriminator["propertyName"] : nil
+      return variants.first if property.nil?
+
+      marked = variants.find do |variant|
+        values = variant.dig("properties", property, "enum")
+        values.is_a?(Array) && values.size == 1
+      end
+      marked || variants.first
     end
 
     def note_variants(path, keyword, variants, discriminator)

@@ -9,7 +9,16 @@ require "uri"
 # запустить и проверить тестами вне приложения.
 class Provider
   class Error < StandardError; end
-  class RateLimitError < Error; end
+  # Провайдер сообщает, через сколько можно повторить, заголовком Retry-After:
+  # значение доносится до вызывающего кода, иначе бэкофф считать не из чего
+  class RateLimitError < Error
+    attr_reader :retry_after
+
+    def initialize(retry_after = nil)
+      @retry_after = retry_after
+      super("rate limit")
+    end
+  end
   class UnauthorizedError < Error; end
 
   # Результат работы метода сервиса
@@ -42,11 +51,16 @@ class Provider
     READ_TIMEOUT = 15
 
     class Response
-      attr_reader :code, :body
+      attr_reader :code, :body, :headers
 
-      def initialize(code, body)
+      def initialize(code, body, headers = {})
         @code = code
         @body = body
+        @headers = headers
+      end
+
+      def retry_after
+        headers["retry-after"]&.to_i
       end
 
       def success?
@@ -76,10 +90,12 @@ class Provider
       }
       response = Net::HTTP.start(uri.hostname, uri.port, **options) { |http| http.request(http_request) }
 
-      raise UnauthorizedError if response.code.to_i == 401
-      raise RateLimitError if response.code.to_i == 429
+      headers = response.each_header.to_h
 
-      Response.new(response.code.to_i, parse_body(response.body))
+      raise UnauthorizedError if response.code.to_i == 401
+      raise RateLimitError, headers["retry-after"]&.to_i if response.code.to_i == 429
+
+      Response.new(response.code.to_i, parse_body(response.body), headers)
     end
 
     def parse_body(body)
@@ -123,8 +139,10 @@ class Provider
       Result.new(:success, payload: payload)
     end
 
-    def failure(code, message)
-      Result.new(:failure, code: code, message: message)
+    # payload несёт решение о ретрае: код действия из ERROR_MAP и, если
+    # провайдер прислал Retry-After, паузу перед повтором
+    def failure(code, message, payload = {})
+      Result.new(:failure, code: code, message: message, payload: payload)
     end
 
     def approve_operation(provider_operation_id)

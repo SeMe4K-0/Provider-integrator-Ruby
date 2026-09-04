@@ -2,6 +2,7 @@
 
 require "yaml"
 
+require_relative "content"
 require_relative "spec_loader"
 require_relative "analysis_result"
 require_relative "ir/endpoint"
@@ -14,9 +15,8 @@ module ProviderIntegrator
   #   1. обычный path с security: [] и характерным именем (как у NovaPay);
   #   2. раздел "webhooks:" верхнего уровня (OpenAPI 3.1) — для каждой операции
   #      внутри него синтезируется псевдо-эндпоинт с путём "webhook:<имя>".
-  # Раздел "callbacks:" (колбэки внутри операций, OpenAPI 3.0) сознательно не
-  # разбирается — это отдельный механизм, не отражённый в IR Части 1. Лучше явно
-  # не поддерживать его, чем притвориться, что он учтён.
+  #   3. раздел "callbacks:" внутри операции (OpenAPI 3.0) — штатный способ
+  #      описать уведомление в 3.0, разбирается тем же кодом, что и webhooks:.
   class SemanticAnalyzer
     DEFAULT_RULES_DIR = File.expand_path("../../config/rules", __dir__)
 
@@ -104,30 +104,57 @@ module ProviderIntegrator
     end
 
     def webhooks_section_endpoints
-      Hash(@spec_model.raw_webhooks).flat_map do |name, path_item|
+      from_webhooks = synthesize(@spec_model.raw_webhooks, "webhook")
+      # callbacks описывают уведомление на один уровень глубже: имя колбэка →
+      # выражение адреса → path item, поэтому предварительно разворачиваются
+      from_callbacks = synthesize(flatten_callbacks(@spec_model.raw_callbacks), "callback")
+      from_webhooks + from_callbacks
+    end
+
+    # callbacks вложены на уровень глубже webhooks: имя колбэка → выражение
+    # адреса → path item. Выражение адреса вычисляет провайдер, нам важен
+    # только сам path item с телом уведомления.
+    def flatten_callbacks(callbacks)
+      Hash(callbacks).each_with_object({}) do |(name, definition), acc|
+        items = Hash(definition).values.select { |item| item.is_a?(Hash) }
+        items.each_with_index do |path_item, index|
+          acc[items.size > 1 ? "#{name}:#{index}" : name] = path_item
+        end
+      end
+    end
+
+    def synthesize(source, prefix)
+      Hash(source).flat_map do |name, path_item|
         next [] unless path_item.is_a?(Hash)
 
         SpecLoader::HTTP_METHODS.filter_map do |method|
           operation = path_item[method]
           next unless operation.is_a?(Hash)
 
-          synthetic_endpoint(name, method, operation)
+          synthetic_endpoint("#{prefix}:#{name}", method, operation)
         end
       end
     end
 
-    def synthetic_endpoint(name, method, operation)
+    # Псевдо-эндпоинт для уведомления. Тело, примеры и ответы извлекаются тем же
+    # кодом, что и у обычных операций: иначе вебхук из webhooks:/callbacks:
+    # остаётся без фикстур и без описанных кодов ответа.
+    def synthetic_endpoint(path, method, operation)
+      request_body = operation["requestBody"]
+
       endpoint = IR::Endpoint.new(
-        path: "webhook:#{name}",
+        path: path,
         http_method: method,
-        operation_id: operation["operationId"] || name,
+        operation_id: operation["operationId"] || path,
         summary: operation["summary"],
         # Параметры переносятся как есть: среди них объявлен заголовок подписи,
         # без которого проверка подписи не сгенерируется
         parameters: SpecLoader.build_parameters(operation["parameters"]),
-        request_body_schema: operation.dig("requestBody", "content", "application/json", "schema"),
-        responses: {},
-        security_names: []
+        request_body_schema: Content.schema(request_body),
+        responses: Content.responses(operation["responses"]),
+        security_names: [],
+        request_examples: request_body.is_a?(Hash) ? Content.examples(request_body) : {},
+        response_examples: Content.response_examples(operation["responses"])
       )
       endpoint.role = :webhook
       endpoint

@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "english"
 require "tmpdir"
 
 # Самое важное свойство генератора нельзя проверить, читая его код: результат
@@ -19,6 +20,8 @@ RSpec.describe "сгенерированные интеграции" do
   }.freeze
 
   ROOT = File.expand_path("..", __dir__)
+  NL = "
+"
 
   def generate(provider, relative_spec, dir)
     ProviderIntegrator::Pipeline.new(
@@ -26,8 +29,12 @@ RSpec.describe "сгенерированные интеграции" do
     ).run
   end
 
+  # Вывод команды не глушится, а возвращается вместе с результатом: при падении
+  # сгенерированного самотеста без него виден только «expected true, got false»,
+  # и причина остаётся неизвестной.
   def run_command(*command)
-    system(*command, out: File::NULL, err: File::NULL)
+    output = IO.popen(command, err: %i[child out], &:read)
+    [$CHILD_STATUS.success?, output.to_s]
   end
 
   SPECS.each do |provider, relative_spec|
@@ -42,14 +49,18 @@ RSpec.describe "сгенерированные интеграции" do
       it "генерирует синтаксически корректный Ruby" do
         generate(provider, relative_spec, @dir)
 
-        expect(run_command(RbConfig.ruby, "-c", File.join(@dir, "#{provider}_service.rb"))).to be true
+        success, output = run_command(RbConfig.ruby, "-c", File.join(@dir, "#{provider}_service.rb"))
+
+        expect(success).to be(true), "сгенерированный сервис не компилируется:#{NL}#{output}"
       end
 
       it "сгенерированный самотест проходит" do
         generate(provider, relative_spec, @dir)
         self_test = File.join(@dir, "#{provider}_integration_self_test_spec.rb")
 
-        expect(run_command(RbConfig.ruby, "-S", "rspec", self_test, "--options", File::NULL)).to be true
+        success, output = run_command(RbConfig.ruby, "-S", "rspec", self_test, "--options", File::NULL)
+
+        expect(success).to be(true), "сгенерированный самотест не прошёл:#{NL}#{output}"
       end
     end
   end

@@ -81,13 +81,23 @@ RSpec.describe ProviderIntegrator::Pipeline do
   describe "провайдер без вебхука" do
     let(:no_webhook_spec) { File.expand_path("fixtures/no_webhook_provider.yaml", __dir__) }
 
-    it "не генерирует обработку уведомлений и честно пишет об этом в документации" do
+    it "сохраняет метод контракта, но явно сообщает об отсутствии уведомлений" do
       generate(spec_path: no_webhook_spec, provider: "bankex")
       service = File.read(File.join(@output_dir, "bankex_service.rb"))
       docs = File.read(File.join(@output_dir, "INTEGRATION.md"))
 
-      expect(service).not_to include("def process_callback")
+      expect(service).to include("def process_callback(_payload)")
+      expect(service).to include("provider.callbacks_not_supported")
       expect(docs).to include("не найден заголовок с подписью")
+    end
+
+    it "генерирует все четыре метода контракта Provider::BaseService" do
+      generate(spec_path: no_webhook_spec, provider: "bankex")
+      service = File.read(File.join(@output_dir, "bankex_service.rb"))
+
+      %w[check_conditions create_request fetch_status process_callback].each do |method|
+        expect(service).to include("def #{method}")
+      end
     end
 
     it "сообщает в документации о том, что осталось нераспознанным" do

@@ -3,18 +3,18 @@
 require "json"
 require "openssl"
 
-# Сервис сгенерирован из спецификации "<%= spec_title %>" (версия <%= spec_version %>).
+# Сервис сгенерирован из спецификации "<%= rb_comment(spec_title) %>" (версия <%= rb_comment(spec_version) %>).
 # Правки вносите в спецификацию или в config/rules/*.yml и перегенерируйте файл.
 class Provider
   class <%= class_name %> < BaseService
-    BASE_URL = ENV.fetch("<%= env_var_name %>", "<%= default_base_url %>")
+    BASE_URL = ENV.fetch(<%= rb(env_var_name) %>, <%= rb(default_base_url) %>)
 <% if signature -%>
 
     # Заголовок с подписью входящего уведомления
 <% unless signature.confirmed -%>
-    # TODO: алгоритм подписи не указан в спецификации явно, принят HMAC-<%= signature.algorithm %>/<%= signature.encoding %> — подтвердите у провайдера
+    # TODO: алгоритм подписи не указан в спецификации явно, принят HMAC-<%= rb_comment(signature.algorithm) %>/<%= rb_comment(signature.encoding) %> — подтвердите у провайдера
 <% end -%>
-    SIGNATURE_HEADER = "<%= signature.header_name %>"
+    SIGNATURE_HEADER = <%= rb(signature.header_name) %>
 <% end -%>
 <% if min_amount -%>
 
@@ -25,10 +25,10 @@ class Provider
     # Статусы провайдера → статусы Space Payments
     STATUS_MAP = {
 <% status_map.each do |provider_status, canonical| -%>
-      "<%= provider_status %>" => "<%= canonical %>",
+      <%= rb(provider_status) %> => <%= rb(canonical) %>,
 <% end -%>
 <% unresolved_statuses.each do |status| -%>
-      # TODO: статус "<%= status %>" не сопоставлен, добавьте синоним в config/rules/statuses.yml
+      # TODO: статус <%= rb(status) %> не сопоставлен, добавьте синоним в config/rules/statuses.yml
 <% end -%>
 <% if status_map.empty? -%>
       # TODO: в спецификации не найден перечень статусов операции — заполните таблицу вручную
@@ -38,7 +38,7 @@ class Provider
     # HTTP-коды провайдера → внутренние коды ошибок и действия
     ERROR_MAP = {
 <% error_map.each do |code, rule| -%>
-      <%= code %> => { code: "<%= rule[:code] %>", action: "<%= rule[:action] %>" },
+      <%= code.to_i %> => { code: <%= rb(rule[:code]) %>, action: <%= rb(rule[:action]) %> },
 <% end -%>
 <% if error_map.empty? -%>
       # TODO: в спецификации не описаны ответы с кодами 4xx/5xx — заполните таблицу вручную
@@ -61,36 +61,50 @@ class Provider
       504 => :gateway_timeout
     }.freeze
 
-<% if min_amount -%>
+    # Контракт Provider::BaseService состоит из четырёх методов, и все четыре
+    # присутствуют в файле: там, где спецификация не описывает соответствующий
+    # механизм, метод возвращает явный отказ, а не отсутствует молча.
     def check_conditions(operation, request_method = "create")
       base_result = super
       return base_result if base_result.failed?
+<% if min_amount -%>
       return failure(:unprocessable_entity, "amount_too_low") if operation.amount < MIN_AMOUNT
+<% else -%>
+      # TODO: в спецификации нет ограничений на сумму или реквизиты — добавьте
+      # предпроверки, если провайдер требует их по документации
+<% end -%>
 
       success
     end
 
-<% end -%>
 <% if create_path -%>
     def create_request(operation, request_method = "create")
-      response = client.post(url_for("<%= create_path %>"), json: build_payload(operation), headers: create_headers(operation))
+      response = client.post(url_for(<%= create_path_expression %>), json: build_payload(operation), headers: create_headers(operation))
       parse_create_response(operation, response)
-    rescue Provider::RateLimitError
-      failure(:too_many_requests, "provider.rate_limit")
+    rescue Provider::RateLimitError => e
+      failure(:too_many_requests, "provider.rate_limit", { action: "retry_backoff", retry_after: e.retry_after })
     rescue Provider::UnauthorizedError
       failure(:unauthorized, "provider.invalid_credentials")
     end
 
 <% end -%>
+<% unless status_path_expression -%>
+    # В спецификации нет эндпоинта запроса статуса: статус приходит только
+    # уведомлением. Метод контракта сохранён, чтобы вызов не падал.
+    def fetch_status(_operation)
+      failure(:not_implemented, "provider.status_endpoint_missing")
+    end
+
+<% end -%>
 <% if status_path -%>
     def fetch_status(operation)
-      response = client.get(url_for("<%= status_path %>"), headers: auth_headers)
-      return failure(*error_for(response.code)) unless response.success?
+      response = client.get(url_for(<%= status_path_expression %>), headers: auth_headers)
+      return failure(*error_for(response.code, response)) unless response.success?
       return failure(:unprocessable_entity, "provider.malformed_response") unless response.body.is_a?(Hash)
 
-      map_status(response.body["<%= status_field %>"])
-    rescue Provider::RateLimitError
-      failure(:too_many_requests, "provider.rate_limit")
+      map_status(response.body[<%= rb(status_field) %>])
+    rescue Provider::RateLimitError => e
+      failure(:too_many_requests, "provider.rate_limit", { action: "retry_backoff", retry_after: e.retry_after })
     rescue Provider::UnauthorizedError
       failure(:unauthorized, "provider.invalid_credentials")
     end
@@ -98,11 +112,11 @@ class Provider
 <% end -%>
 <% if cancel_path -%>
     def cancel_request(operation)
-      response = client.post(url_for("<%= cancel_path %>"), json: {}, headers: auth_headers)
-      return failure(*error_for(response.code)) unless response.success?
+      response = client.post(url_for(<%= cancel_path_expression %>), json: {}, headers: auth_headers)
+      return failure(*error_for(response.code, response)) unless response.success?
       return failure(:unprocessable_entity, "provider.malformed_response") unless response.body.is_a?(Hash)
 
-      map_status(response.body["<%= status_field %>"])
+      map_status(response.body[<%= rb(status_field) %>])
     end
 
 <% end -%>
@@ -113,6 +127,11 @@ class Provider
 <% if signature -%>
     # Подпись обязательна: неподписанное уведомление отклоняется, даже если
     # тело выглядит корректным.
+<% else -%>
+    # TODO: в спецификации не найден заголовок с подписью уведомления, поэтому
+    # проверка подписи не сгенерирована. Сейчас метод доверяет любому входящему
+    # запросу — до выхода в продакшн уточните схему подписи у провайдера
+    # и добавьте её проверку здесь.
 <% end -%>
     def process_callback(payload)
       body = callback_body(payload)
@@ -122,8 +141,8 @@ class Provider
       return failure(:unauthorized, "provider.invalid_signature") unless valid_signature?(payload)
 
 <% end -%>
-      provider_operation_id = body["<%= webhook_id_field %>"]
-      status = body["<%= status_field %>"] || body["event"].to_s.split(".").last
+      provider_operation_id = body[<%= rb(webhook_id_field) %>]
+      status = body[<%= rb(status_field) %>] || body["event"].to_s.split(".").last
 
       case STATUS_MAP[status.to_s]
       when "approved" then approve_operation(provider_operation_id)
@@ -134,11 +153,20 @@ class Provider
     end
 
 <% end -%>
+<% unless webhook_endpoint -%>
+    # В спецификации не описано входящее уведомление: ни отдельным путём,
+    # ни разделом webhooks:/callbacks:. Метод контракта сохранён и явно
+    # сообщает, что провайдер уведомлений не присылает.
+    def process_callback(_payload)
+      failure(:not_implemented, "provider.callbacks_not_supported")
+    end
+
+<% end -%>
     private
 
     # Базовый адрес API; переопределяется через переменную окружения для стендов и тестов
     def base_url
-      ENV.fetch("<%= env_var_name %>", BASE_URL)
+      ENV.fetch(<%= rb(env_var_name) %>, BASE_URL)
     end
 
     # Адрес запроса<% if auth_query_parameter %> с добавленным ключом авторизации<% end %>
@@ -150,9 +178,9 @@ class Provider
 <% end -%>
     end
 
-    # Заголовки авторизации: <%= auth_comment %>
+    # Заголовки авторизации: <%= rb_comment(auth_comment) %>
 <% if unsupported_auth -%>
-    # TODO: схема <%= unsupported_auth %> генератором не поддержана — заполните заголовки вручную,
+    # TODO: схема <%= rb_comment(unsupported_auth) %> генератором не поддержана — заполните заголовки вручную,
     # иначе запросы уйдут без авторизации
 <% end -%>
     def auth_headers
@@ -163,7 +191,7 @@ class Provider
     # Ключ передаётся параметром запроса, а не заголовком
     def with_auth_query(url)
       separator = url.include?("?") ? "&" : "?"
-      "#{url}#{separator}<%= auth_query_parameter %>=#{credentials.fetch(:api_key)}"
+      url + separator + <%= rb(auth_query_parameter) %> + "=" + credentials.fetch(:api_key).to_s
     end
 <% end -%>
 <% if create_path -%>
@@ -174,15 +202,15 @@ class Provider
     # того же запроса не создаст у провайдера вторую выплату
 <% end -%>
 <% required_header_params.each do |parameter| -%>
-    # TODO: провайдер требует заголовок <%= parameter.name %> (<%= parameter.description || 'описание не задано' %>) — задайте значение
+    # TODO: провайдер требует заголовок <%= rb_comment(parameter.name) %> (<%= rb_comment(parameter.description || "описание не задано") %>) — задайте значение
 <% end -%>
     def create_headers(operation)
-      auth_headers<% if idempotency_header_name %>.merge("<%= idempotency_header_name %>" => operation.id.to_s)<% end %>
+      auth_headers<% if idempotency_header_name %>.merge(<%= rb(idempotency_header_name) %> => operation.id.to_s)<% end %>
     end
 <% end -%>
 
 <% payload_todos.each do |todo| -%>
-    # TODO: <%= todo %>
+    # TODO: <%= rb_comment(todo) %>
 <% end -%>
     # Незаполненные реквизиты отбрасываются: провайдеру не отправляются поля со значением nil
     def build_payload(operation)
@@ -195,11 +223,19 @@ class Provider
       # Повтор с тем же ключом идемпотентности возвращает уже созданную
       # операцию, а не ошибку: её нужно принять, а не отклонить
       return parse_duplicate(operation, response) if error_action(response.code) == "fetch_status"
-      return failure(*error_for(response.code)) unless response.success?
+      return failure(*error_for(response.code, response)) unless response.success?
       return failure(:unprocessable_entity, "provider.malformed_response") unless response.body.is_a?(Hash)
 
-      operation.provider_operation_id = response.body["<%= provider_id_field %>"]
-      map_status(response.body["<%= status_field %>"])
+      operation.provider_operation_id = response.body[<%= rb(provider_id_field) %>]
+      map_created_status(response.body[<%= rb(status_field) %>])
+    end
+
+    # Ответ на создание без статуса — не ошибка: провайдер принял операцию,
+    # а её исход придёт уведомлением или отдельным запросом статуса
+    def map_created_status(provider_status)
+      return success(status: "in_progress") if provider_status.nil? || STATUS_MAP.empty?
+
+      map_status(provider_status)
     end
 <% if webhook_endpoint -%>
 
@@ -237,9 +273,15 @@ class Provider
     # HTTP-код провайдера в статус Space Payments и внутренний код ошибки.
     # Действие (retry / retry_backoff / alert_*) берётся из ERROR_MAP вызывающей
     # стороной — оно определяет, повторять ли операцию.
-    def error_for(http_code)
+    # Код результата берётся из HTTP-семантики (429 → :too_many_requests),
+    # а решение о повторе — из ERROR_MAP и заголовка Retry-After: без этого
+    # вычисленный action остался бы мёртвой строкой в таблице.
+    def error_for(http_code, response = nil)
       rule = ERROR_MAP[http_code] || { code: "internal_error", action: "alert_and_retry" }
-      [HTTP_STATUS_MAP.fetch(http_code, :unprocessable_entity), "provider.#{rule[:code]}"]
+      payload = { action: rule[:action] }
+      payload[:retry_after] = response.retry_after if response.respond_to?(:retry_after) && response.retry_after
+
+      [HTTP_STATUS_MAP.fetch(http_code, :unprocessable_entity), "provider.#{rule[:code]}", payload]
     end
 
     def error_action(http_code)
@@ -249,8 +291,8 @@ class Provider
     def parse_duplicate(operation, response)
       return failure(:conflict, "provider.duplicate_request") unless response.body.is_a?(Hash)
 
-      operation.provider_operation_id = response.body["<%= provider_id_field %>"]
-      map_status(response.body["<%= status_field %>"])
+      operation.provider_operation_id = response.body[<%= rb(provider_id_field) %>]
+      map_status(response.body[<%= rb(status_field) %>])
     end
 <% if signature -%>
 
@@ -258,10 +300,10 @@ class Provider
     def valid_signature?(payload)
       raw_body = callback_raw_body(payload)
 <% if signature.encoding == "base64" -%>
-      digest = OpenSSL::HMAC.digest("<%= signature.algorithm %>", credentials.fetch(:callback_secret), raw_body)
+      digest = OpenSSL::HMAC.digest(<%= rb(signature.algorithm) %>, credentials.fetch(:callback_secret), raw_body)
       expected = [digest].pack("m0")
 <% else -%>
-      expected = OpenSSL::HMAC.hexdigest("<%= signature.algorithm %>", credentials.fetch(:callback_secret), raw_body)
+      expected = OpenSSL::HMAC.hexdigest(<%= rb(signature.algorithm) %>, credentials.fetch(:callback_secret), raw_body)
 <% end -%>
       OpenSSL.secure_compare(expected, callback_signature(payload).to_s)
     end

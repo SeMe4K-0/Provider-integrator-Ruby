@@ -8,7 +8,7 @@ ROLE_LABELS = {
   create: "создание", status: "статус", cancel: "отмена", webhook: "webhook", other: "прочее"
 }.freeze
 
-options = { lang: "ruby", output: File.expand_path("../output", __dir__) }
+options = { lang: "ruby" }
 
 PROVIDER_NAME_FORMAT = /\A[a-z][a-z0-9_]*\z/
 
@@ -20,6 +20,7 @@ begin
     parser.on("--lang LANG", "Целевой язык генерации (поддерживается ruby)") { |v| options[:lang] = v }
     parser.on("--output DIR", "Каталог для результата генерации") { |v| options[:output] = v }
     parser.on("--dry-run", "Только разобрать спецификацию и показать отчёт, файлы не создавать") { options[:dry_run] = true }
+    parser.on("--debug", "Печатать трейс при непредвиденной ошибке") { options[:debug] = true }
   end.parse!(ARGV)
 rescue OptionParser::ParseError => e
   warn "Ошибка в аргументах: #{e.message}"
@@ -48,6 +49,11 @@ unless provider.match?(PROVIDER_NAME_FORMAT)
   exit 1
 end
 
+# Каталог результата по умолчанию свой для каждого провайдера: при генерации
+# второго провайдера в общий ./output рядом остались бы файлы первого,
+# а fixtures.json и INTEGRATION.md молча перезаписались бы
+options[:output] ||= File.expand_path("../output/#{provider}", __dir__)
+
 puts "Parsing spec..."
 
 begin
@@ -62,6 +68,15 @@ rescue ProviderIntegrator::SpecLoadError => e
   exit 1
 rescue ProviderIntegrator::GenerationError => e
   warn "Ошибка генерации: #{e.message}"
+  exit 1
+rescue StandardError => e
+  # Последний рубеж: непредусмотренная ошибка не должна вываливаться трейсом.
+  # Полный трейс доступен по ключу --debug — он нужен при разборе,
+  # но не пользователю, запустившему генератор на своей спецификации.
+  warn "Непредвиденная ошибка при обработке спецификации: #{e.class} — #{e.message}"
+  warn "Похоже, спецификация содержит конструкцию, которую генератор не разбирает."
+  warn e.backtrace.take(10).join("\n") if options[:debug]
+  warn "Запустите с ключом --debug, чтобы увидеть подробности." unless options[:debug]
   exit 1
 end
 

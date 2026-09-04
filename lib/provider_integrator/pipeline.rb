@@ -68,8 +68,22 @@ module ProviderIntegrator
         context.self_test_file_name => renderer.render("self_test_spec.rb.erb")
       }
 
+      files.each { |name, content| verify_ruby!(name, content) }
       written = files.map { |name, content| write_file(name, content) }
       written + copy_stubs
+    end
+
+    # Сгенерированный Ruby компилируется до записи на диск. Без этой проверки
+    # генератор мог отрапортовать успех и нулевой код возврата, оставив файл
+    # с синтаксической ошибкой — она всплыла бы только при подключении сервиса.
+    def verify_ruby!(name, content)
+      return unless name.end_with?(".rb")
+
+      RubyVM::InstructionSequence.compile(content, name)
+    rescue SyntaxError => e
+      raise GenerationError,
+            "Сгенерированный файл #{name} не компилируется: #{e.message.lines.first.to_s.strip}. " \
+            "Обычно причина — необычные значения в спецификации; сообщите об этом случае."
     end
 
     def prepare_output_dir

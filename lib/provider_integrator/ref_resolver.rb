@@ -12,6 +12,12 @@ module ProviderIntegrator
     def initialize(root)
       @root = root
       @notes = []
+      # Разрешённые ссылки кэшируются: без этого переиспользуемая схема
+      # разворачивается заново на каждом упоминании, и документ с общими
+      # компонентами (ровно то, ради чего существует components) даёт
+      # экспоненциальный рост времени разбора.
+      @cache = {}
+      @stub_count = 0
     end
 
     # Рекурсивно обходит узел и заменяет каждый { "$ref" => "#/..." } на данные,
@@ -39,8 +45,15 @@ module ProviderIntegrator
         raise SpecLoadError, "Внешние ссылки $ref не поддерживаются: \"#{ref}\""
       end
       return recursive_stub(ref) if active.include?(ref)
+      return @cache[ref] if @cache.key?(ref)
 
-      resolve(pointer(ref), active + [ref])
+      stubs_before = @stub_count
+      result = resolve(pointer(ref), active + [ref])
+      # Результат кэшируется только если внутри не было обрыва рекурсии:
+      # оборванная ветка зависит от цепочки, по которой в неё пришли,
+      # и переиспользовать её в другом месте документа нельзя.
+      @cache[ref] = result if @stub_count == stubs_before
+      result
     end
 
     # Схема, ссылающаяся на саму себя, — законная и нередкая конструкция OpenAPI.
@@ -48,6 +61,7 @@ module ProviderIntegrator
     # схемой, а факт обрыва попадает в замечания разбора. Глубже этого уровня
     # генератору всё равно нечего извлечь.
     def recursive_stub(ref)
+      @stub_count += 1
       @notes << "схема \"#{ref}\" ссылается на саму себя — рекурсивная ветка оборвана, " \
                 "вложенные уровни в модель не попали"
       {}

@@ -21,7 +21,7 @@
 | Роль | Endpoint | Назначение | Идемпотентность |
 |------|----------|------------|-----------------|
 <% method_rows.each do |row| -%>
-| <%= row[:role] %> | `<%= row[:endpoint] %>` | <%= row[:summary] %> | <%= row[:idempotency] %> |
+| <%= md(row[:role]) %> | `<%= md(row[:endpoint]) %>` | <%= md(row[:summary]) %> | <%= md(row[:idempotency]) %> |
 <% end -%>
 
 ## Маппинг статусов
@@ -29,7 +29,7 @@
 | Провайдер | Space Payments |
 |-----------|----------------|
 <% status_map.each do |provider_status, canonical| -%>
-| <%= provider_status %> | <%= canonical %> |
+| <%= md(provider_status) %> | <%= md(canonical) %> |
 <% end -%>
 
 ## Обработка ошибок
@@ -37,7 +37,7 @@
 | HTTP | Внутренний код | Действие |
 |------|----------------|----------|
 <% error_map.each do |code, rule| -%>
-| <%= code %> | <%= rule[:code] %> | <%= rule[:action] %> |
+| <%= code %> | <%= md(rule[:code]) %> | <%= md(rule[:action]) %> |
 <% end -%>
 <% unless mapping.provider_error_codes.empty? -%>
 
@@ -107,7 +107,7 @@ HMAC-<%= signature.algorithm %>(сырое тело запроса, `credentials
 | Категория | Элемент | Причина |
 |-----------|---------|---------|
 <% unresolved_entries.each do |entry| -%>
-| <%= entry.category %> | <%= entry.key %> | <%= entry.detail %> |
+| <%= md(entry.category) %> | <%= md(entry.key) %> | <%= md(entry.detail) %> |
 <% end -%>
 <% else -%>
 ## Требует ручного решения

@@ -23,10 +23,32 @@ module ProviderIntegrator
       @sources = YAML.load_file(File.join(rules_dir, "operation_sources.yml"))
       @heuristics = YAML.load_file(File.join(rules_dir, "heuristics.yml"))
       @payload_todos = []
+      @path_credentials = []
     end
 
     def get_binding
       binding
+    end
+
+    # Любое значение из спецификации, попадающее в Ruby-исходник, проходит через
+    # этот хелпер. Спецификация приходит от стороннего провайдера, то есть это
+    # недоверенный ввод: строка вида "https://x/#{`whoami`}" внутри обычного
+    # литерала выполнилась бы при загрузке сгенерированного файла, а кавычка
+    # в имени заголовка просто сломала бы синтаксис. dump закрывает оба случая.
+    def rb(value)
+      value.to_s.dump
+    end
+
+    # То же для текста, попадающего в комментарий: перевод строки разорвал бы
+    # комментарий и вынес остаток строки в код
+    def rb_comment(value)
+      value.to_s.gsub(/\s*\R\s*/, " ").strip
+    end
+
+    # Текст из спецификации внутри таблицы Markdown: вертикальная черта
+    # разорвала бы строку таблицы, перевод строки — саму таблицу
+    def md(value)
+      value.to_s.gsub(/\s*\R\s*/, " ").gsub("|", %q{\|}).strip
     end
 
     def class_name
@@ -133,6 +155,53 @@ module ProviderIntegrator
       create_endpoint&.path
     end
 
+    # Путь собирается конкатенацией, а не интерполяцией: литеральные куски
+    # приходят из чужой спецификации и вставляются экранированными, а на месте
+    # {параметров} стоят выражения. У эндпоинта создания идентификатора операции
+    # ещё нет, поэтому все его параметры пути берутся из credentials.
+    def create_path_expression
+      path_expression(create_endpoint, use_operation_id: false)
+    end
+
+    def status_path_expression
+      path_expression(status_endpoint, use_operation_id: true)
+    end
+
+    def cancel_path_expression
+      path_expression(cancel_endpoint, use_operation_id: true)
+    end
+
+    def path_expression(endpoint, use_operation_id:)
+      return nil if endpoint.nil?
+
+      names = endpoint.path.scan(/\{([^}]+)\}/).flatten
+      operation_param = use_operation_id ? names.last : nil
+
+      pieces = endpoint.path.split(/(\{[^}]+\})/).reject(&:empty?).map do |part|
+        next rb(part) unless part.start_with?("{")
+
+        name = part[1..-2]
+        name == operation_param ? "operation.provider_operation_id.to_s" : credential_path_expression(name)
+      end
+      pieces.join(" + ")
+    end
+
+    # Параметр пути, не являющийся идентификатором операции, — это почти всегда
+    # идентификатор уровня аккаунта (merchant_id, shop_id): его место в
+    # credentials, а не в теле операции
+    def credential_path_expression(name)
+      key = name.to_s.downcase.gsub(/[^a-z0-9_]/, "_")
+      @path_credentials << key
+      "credentials.fetch(:#{key}).to_s"
+    end
+
+    def path_credentials
+      create_path_expression
+      status_path_expression
+      cancel_path_expression
+      @path_credentials.uniq
+    end
+
     # Путь статуса с подставленным идентификатором операции вместо {параметра}
     def status_path
       substitute_path(status_endpoint)
@@ -158,7 +227,7 @@ module ProviderIntegrator
 
       case scheme.type
       when "apiKey"
-        scheme.location == "header" ? %({ "#{scheme.header_name}" => credentials.fetch(:api_key) }) : "{}"
+        scheme.location == "header" ? "{ #{rb(scheme.header_name)} => credentials.fetch(:api_key) }" : "{}"
       when "http"
         scheme.scheme == "bearer" ? bearer_expression : basic_expression
       else
@@ -324,27 +393,30 @@ module ProviderIntegrator
       requisite_type || "sbp"
     end
 
+    # Ключи для самотеста берутся из той же схемы, что и auth_headers: иначе
+    # сервис читает credentials.fetch(:token), а тест передаёт basic_token,
+    # и прогон падает с KeyError на ровном месте
     def credentials_literal
-      scheme = spec.security_schemes.values.first
-      secret = mapping.signature ? ", callback_secret: callback_secret" : ""
-
-      case scheme&.type
-      when "http"
-        scheme.scheme == "bearer" ? "{ token: \"test_token\"#{secret} }" : "{ basic_token: \"test_token\"#{secret} }"
-      else
-        "{ api_key: \"test_api_key\"#{secret} }"
-      end
+      parts = case auth_scheme&.type
+              when "http"
+                auth_scheme.scheme == "bearer" ? ['token: "test_token"'] : ['basic_token: "test_token"']
+              else
+                ['api_key: "test_api_key"']
+              end
+      parts += path_credentials.map { |key| "#{key}: \"test_#{key}\"" }
+      parts << "callback_secret: callback_secret" if mapping.signature
+      "{ #{parts.join(', ')} }"
     end
 
     # Проверка авторизации в самотесте зависит от того, куда уходит ключ:
     # заголовком его ищут в headers, параметром запроса — в адресе
     def auth_assertion
       scheme = auth_scheme
-      return %(expect(@server.requests.last.path).to include("#{auth_query_parameter}=test_api_key")) if auth_query_parameter
+      return %(expect(@server.requests.last.path).to include(#{rb("#{auth_query_parameter}=test_api_key")})) if auth_query_parameter
 
       case scheme&.type
       when "apiKey"
-        %(expect(@server.requests.last.headers).to include("#{scheme.header_name.downcase}" => "test_api_key"))
+        %(expect(@server.requests.last.headers).to include(#{rb(scheme.header_name.downcase)} => "test_api_key"))
       when "http"
         value = scheme.scheme == "bearer" ? "Bearer test_token" : "Basic test_token"
         %(expect(@server.requests.last.headers).to include("authorization" => "#{value}"))
@@ -502,7 +574,7 @@ module ProviderIntegrator
       enum = nil unless enum.is_a?(Array) && !enum.empty?
       source = @sources[canonical]
 
-      return %("#{enum.first}") if enum && enum.size == 1
+      return rb(enum.first) if enum && enum.size == 1
       return literal_from_enum(entry, enum) if enum && source.nil?
 
       if source.nil?
@@ -515,7 +587,7 @@ module ProviderIntegrator
 
     def literal_from_enum(entry, enum)
       @payload_todos << "поле #{entry[:path].join('.')}: выбрано \"#{enum.first}\" из вариантов #{enum.join(', ')} — проверьте, что это соответствует шлюзу"
-      %("#{enum.first}")
+      rb(enum.first)
     end
 
     def substitute_path(endpoint)
